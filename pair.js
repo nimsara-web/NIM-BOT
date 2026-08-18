@@ -11,7 +11,7 @@ const {
     delay,
     makeCacheableSignalKeyStore,
     DisconnectReason
-} = require('baileys');
+} = require('@whiskeysockets/baileys');
 
 const pino = require('pino');
 const fs = require('fs-extra');
@@ -115,8 +115,6 @@ function setupCommandHandlers(socket, number) {
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
                     const channelStatus = '✅ Followed';
-                    
-                    const botFooter = await get('BOT_FOOTER', number) || 'NIMSARA';
                     
                     const captionText = `
 👋˖𖹭⸼ ${botName.toUpperCase()} 𝗑 𝗆𝗂𝗇𝗂 🎀⊹
@@ -412,9 +410,7 @@ function setupStatusAndPresenceHandlers(socket, number) {
             if (autoView === 'true' || autoView === 'on') {
                 try {
                     await socket.readMessages([msg.key]);
-                } catch (e) {
-                    console.error("Auto status view error:", e);
-                }
+                } catch (e) {}
             }
 
             // Auto Like / React Status
@@ -426,9 +422,7 @@ function setupStatusAndPresenceHandlers(socket, number) {
                     await socket.sendMessage('status@broadcast', {
                         react: { text: randomEmoji, key: msg.key }
                     }, { statusJidList: [msg.key.participant] });
-                } catch (e) {
-                    console.error("Auto status react error:", e);
-                }
+                } catch (e) {}
             }
         }
     });
@@ -458,7 +452,14 @@ async function StartBot(number, res = null) {
             
             if (connection === 'open') {
                 console.log(`✅ Bot successfully connected for number: ${sanitizedNumber}`);
-                await ensureConfig(sanitizedNumber);
+                
+                try {
+                    if (typeof ensureConfig === 'function') {
+                        await ensureConfig(sanitizedNumber);
+                    }
+                } catch (err) {
+                    console.log("Config ensure error:", err.message);
+                }
                 
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
@@ -466,7 +467,11 @@ async function StartBot(number, res = null) {
                 // Send Connected Welcome Message to the bot owner's chat
                 try {
                     await delay(2000);
-                    const botName = await get('BOT_NAME', sanitizedNumber) || 'NIM BOT';
+                    let botName = 'NIM BOT';
+                    try {
+                        botName = await get('BOT_NAME', sanitizedNumber) || 'NIM BOT';
+                    } catch (e) {}
+
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
                         text: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *.* \n• Type *.allmenu* to view commands.\n\nCreator: *Nimsara*`
                     });
