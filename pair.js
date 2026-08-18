@@ -223,22 +223,25 @@ case 'song': {
                     
                     await reply(`🔍 Searching for *${query}*... 🎶`);
                     try {
+                        // YouTube search via yt-search
                         const search = await yts(query);
                         const video = search.videos[0];
                         if (!video) return reply(`❌ Song not found! Try another name.`);
 
                         await reply(`🎵 Found: *${video.title}*\n⏱️ Duration: ${video.timestamp}\n📥 Downloading audio, please wait...`);
 
-                        const audioStream = ytdl(video.url, { filter: 'audioonly', quality: 'highestaudio' });
+                        // Using a public stable API to bypass Render IP block
+                        const apiUrl = `https://delirius-api-oficial.vercel.app/download/ytmp3?url=${encodeURIComponent(video.url)}`;
+                        const res = await axios.get(apiUrl);
                         
-                        const chunks = [];
-                        for await (const chunk of audioStream) {
-                            chunks.push(chunk);
+                        if (!res.data || !res.data.status) {
+                            return reply(`❌ Download failed from API. Try again later.`);
                         }
-                        const buffer = Buffer.concat(chunks);
+
+                        const audioUrl = res.data.data.download.url;
 
                         await socket.sendMessage(sender, {
-                            audio: buffer,
+                            audio: { url: audioUrl },
                             mimetype: 'audio/mpeg',
                             ptt: false,
                             fileName: `${video.title}.mp3`,
@@ -255,12 +258,12 @@ case 'song': {
 
                     } catch (e) {
                         console.error("Song download error:", e);
-                        await reply(`❌ Failed to download song: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        await reply(`❌ Failed to download song: Render IP restricted or API error. \n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     break;
                 }
 
-                case 'tt':
+              case 'tt':
                 case 'tiktok': {
                     const url = args[0];
                     if (!url || !url.includes('tiktok.com')) {
@@ -269,7 +272,12 @@ case 'song': {
 
                     await reply(`📥 Downloading TikTok video in HD quality... Please wait ⏳`);
                     try {
-                        const response = await axios.get(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`);
+                        const response = await axios.get(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`, {
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                'Referer': 'https://www.tikwm.com/'
+                            }
+                        });
                         const data = response.data;
 
                         if (data && data.code === 0 && data.data) {
@@ -292,40 +300,43 @@ case 'song': {
                     }
                     break;
                 }
-
-                case 'yt':
+               case 'yt':
                 case 'youtube': {
                     const url = args[0];
                     const type = args[1] ? args[1].toLowerCase() : 'video';
 
                     if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
-                        return reply(`⚠️ Usage: .yt [YouTube Link] [video/audio]\nExample: .yt https://youtu.be/xxxx video\nExample: .yt https://youtu.be/xxxx audio\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        return reply(`⚠️ Usage: .yt [YouTube Link] [video/audio]\nExample: .yt https://youtu.be/xxxx video\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
 
                     try {
-                        const info = await ytdl.getInfo(url);
-                        const title = info.videoDetails.title;
-
+                        await reply(`📥 Processing YouTube download... Please wait ⏳`);
+                        
                         if (type === 'audio') {
-                            await reply(`📥 Downloading YouTube Audio for *${title}*... 🎧`);
-                            const audioStream = ytdl(url, { filter: 'audioonly', quality: 'highestaudio' });
-                            const chunks = [];
-                            for await (const chunk of audioStream) {
-                                chunks.push(chunk);
-                            }
-                            const buffer = Buffer.concat(chunks);
+                            const apiUrl = `https://delirius-api-oficial.vercel.app/download/ytmp3?url=${encodeURIComponent(url)}`;
+                            const res = await axios.get(apiUrl);
+                            if (!res.data || !res.data.status) return reply(`❌ Failed to fetch audio.`);
+                            
+                            const audioUrl = res.data.data.download.url;
+                            const title = res.data.data.title || 'YouTube Audio';
 
                             await socket.sendMessage(sender, {
-                                audio: buffer,
+                                audio: { url: audioUrl },
                                 mimetype: 'audio/mpeg',
                                 ptt: false,
                                 fileName: `${title}.mp3`
                             }, { quoted: msg });
 
                         } else {
-                            await reply(`📥 Downloading YouTube Video for *${title}*... 🎬`);
+                            const apiUrl = `https://delirius-api-oficial.vercel.app/download/ytmp4?url=${encodeURIComponent(url)}`;
+                            const res = await axios.get(apiUrl);
+                            if (!res.data || !res.data.status) return reply(`❌ Failed to fetch video.`);
+                            
+                            const videoUrl = res.data.data.download.url;
+                            const title = res.data.data.title || 'YouTube Video';
+
                             await socket.sendMessage(sender, {
-                                video: { url: url },
+                                video: { url: videoUrl },
                                 caption: `🎬 *YouTube Video*\n\n📝 Title: ${title}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`
                             }, { quoted: msg });
                         }
