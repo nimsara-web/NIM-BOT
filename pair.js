@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu)
+ * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu + Images)
  */
 
 const {
@@ -24,6 +24,7 @@ const Session = require('./Id');
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb'); 
 
 const SESSION_BASE_PATH = path.join(__dirname, './sessions');
+const BOT_IMAGE_URL = 'https://res.cloudinary.com/dqlh378fb/image/upload/v1787035957/zanta_media_uploads/c9qlcgvmwlcuf7oyb8be.jpg';
 
 // Global tracking maps
 const socketCreationTime = new Map();
@@ -50,6 +51,8 @@ async function useMongoDBAuthState(number) {
     return {
         state,
         saveCreds: async () => {
+            // Ensure directory exists before saving to prevent ENOENT error
+            await fs.ensureDir(sessionDir);
             await saveCreds();
             if (await fs.pathExists(credsPath)) {
                 try {
@@ -165,7 +168,10 @@ function setupCommandHandlers(socket, number) {
 *🏮 FOLLOW MINE CHANNEL :- https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r*
 > _MADE BY NIMSARA_
 `;
-                    await reply(captionText);
+                    await socket.sendMessage(sender, {
+                        image: { url: BOT_IMAGE_URL },
+                        caption: captionText.trim()
+                    }, { quoted: msg });
                     break;
                 }
                 case 'ping': {
@@ -182,7 +188,13 @@ function setupCommandHandlers(socket, number) {
                     const hours = Math.floor(uptime / 3600);
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
-                    await reply(`👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara`);
+                    
+                    const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara`;
+                    
+                    await socket.sendMessage(sender, {
+                        image: { url: BOT_IMAGE_URL },
+                        caption: aliveText
+                    }, { quoted: msg });
                     break;
                 }
                 case 'runtime': {
@@ -274,7 +286,6 @@ function setupCommandHandlers(socket, number) {
 
 // Auto Status Seen, Auto Status React & Always Online Handlers
 function setupStatusAndPresenceHandlers(socket, number) {
-    // Always Online Presence Handler on Connection
     socket.ev.on('connection.update', async (update) => {
         if (update.connection === 'open') {
             try {
@@ -286,7 +297,6 @@ function setupStatusAndPresenceHandlers(socket, number) {
         }
     });
 
-    // Periodic Presence Update to keep Always Online active (if enabled)
     setInterval(async () => {
         try {
             const alwaysOnline = await get('ALWAYS_ONLINE', number) ?? 'true';
@@ -296,13 +306,11 @@ function setupStatusAndPresenceHandlers(socket, number) {
         } catch (e) {}
     }, 60000);
 
-    // Auto Status Seen & React Handler
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
 
         if (msg.key && msg.key.remoteJid === 'status@broadcast') {
-            // Auto View Status
             const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
             if (autoView === 'true' || autoView === 'on') {
                 try {
@@ -310,7 +318,6 @@ function setupStatusAndPresenceHandlers(socket, number) {
                 } catch (e) {}
             }
 
-            // Auto Like / React Status
             const autoLike = await get('AUTO_LIKE_STATUS', number) ?? 'true';
             if (autoLike === 'true' || autoLike === 'on') {
                 try {
@@ -361,7 +368,7 @@ async function StartBot(number, res = null) {
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
 
-                // Send Connected Welcome Message to the bot owner's chat
+                // Send Connected Welcome Message with Image to the owner's chat
                 try {
                     await delay(2000);
                     let botName = 'NIM BOT';
@@ -372,7 +379,8 @@ async function StartBot(number, res = null) {
                     } catch (e) {}
 
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
-                        text: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\nCreator: *Nimsara*`
+                        image: { url: BOT_IMAGE_URL },
+                        caption: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\nCreator: *Nimsara*`
                     });
                 } catch (err) {
                     console.log("Failed to send connect message:", err.message);
@@ -413,7 +421,7 @@ async function StartBot(number, res = null) {
                 return res.send({ status: "Already connected" });
             }
         }
-    } catch (error) {
+    } else (error) => {
         console.error("❌ StartBot fatal error:", error.message);
         if (res && typeof res.status === 'function' && !res.headersSent) {
             return res.status(500).send({ error: error.message || "Internal server error during pairing." });
