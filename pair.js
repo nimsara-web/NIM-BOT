@@ -105,8 +105,6 @@ function getMessageBody(msg) {
            message.extendedTextMessage?.text || 
            message.imageMessage?.caption || 
            message.videoMessage?.caption || '';
-}
-
 function setupCommandHandlers(socket, number) {
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
@@ -117,6 +115,9 @@ function setupCommandHandlers(socket, number) {
         if (!body) return;
 
         const prefix = await get('PREFIX', number) || '.';
+
+
+        
         
         // 👇 1. මෙතන තමයි isCommand කියන එක define කරන්නේ (Prefix එකෙන් පටන් ගන්නවද බලනවා)
         const isCommand = body.startsWith(prefix);
@@ -135,6 +136,19 @@ function setupCommandHandlers(socket, number) {
         // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා (commands වලට විතරක් යටට යන්න දෙනවා)
         if (!isCommand) return;
 
+        // ========================================================
+        // 👇 4. BOT MODE CHECK එක හරියටම මෙතනට දාන්න (ඔන්න ඔය අලුත් කෑල්ල)
+        // ========================================================
+        const isOwner = msg.key.fromMe;
+        const isGroup = sender.endsWith('@g.us');
+
+        if (!isOwner) {
+            if (botMode === 'private') return;                 // Private නම් Owner ට විතරයි
+            if (botMode === 'group' && !isGroup) return;       // Group mode නම් Group වලට විතරයි
+            if (botMode === 'inbox' && isGroup) return;        // Inbox mode නම් Private chat වලට විතරයි
+        }
+        // ========================================================
+
         const args = body.slice(prefix.length).trim().split(/ +/);
         const command = args.shift().toLowerCase();
         const botName = await get('BOT_NAME', number) || 'NIM BOT';
@@ -144,6 +158,11 @@ function setupCommandHandlers(socket, number) {
         };
 
 
+
+
+
+
+        
         try {
             switch (command) {
                 case 'allmenu':
