@@ -175,6 +175,9 @@ function setupCommandHandlers(socket, number) {
                         caption: captionText.trim()
                     }, { quoted: msg });
 
+                    // Delay to ensure image is processed properly before sending voice note
+                    await delay(1500);
+
                     // Send Voice Note (Audio Fixed with audio/mpeg)
                     await socket.sendMessage(sender, {
                         audio: { url: BOT_AUDIO_URL },
@@ -205,6 +208,9 @@ function setupCommandHandlers(socket, number) {
                         image: { url: BOT_IMAGE_URL },
                         caption: aliveText
                     }, { quoted: msg });
+
+                    // Delay before sending voice note
+                    await delay(1500);
 
                     // Send Voice Note (Audio Fixed with audio/mpeg)
                     await socket.sendMessage(sender, {
@@ -400,6 +406,9 @@ async function StartBot(number, res = null) {
                         image: { url: BOT_IMAGE_URL },
                         caption: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\nCreator: *Nimsara*`
                     });
+
+                    // Delay before sending voice note on connect
+                    await delay(1500);
 
                     // Send Voice Note on Connect (Audio Fixed with audio/mpeg)
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
