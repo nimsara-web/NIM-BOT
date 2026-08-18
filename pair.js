@@ -131,6 +131,47 @@ function setupCommandHandlers(socket, number) {
             await socket.readMessages([msg.key]); 
         }
 
+
+// ==========================================
+        // 🤖 AUTO-REPLY LOGIC (කවුරුහරි මැසේජ් දැමූ විට)
+        // ==========================================
+        global.autoReplyMode = global.autoReplyMode || 'off'; // 'all', 'inbox', 'group', 'off'
+
+        if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
+            const isGroup = sender.endsWith('@g.us');
+            const shouldAutoReply = 
+                (global.autoReplyMode === 'all') ||
+                (global.autoReplyMode === 'inbox' && !isGroup) ||
+                (global.autoReplyMode === 'group' && isGroup);
+
+            if (shouldAutoReply) {
+                const textLower = body.toLowerCase().trim();
+
+                // 1. "Hi" දැමූ විට
+                if (textLower === 'Hi' || textLower === 'හායි') {
+                    await socket.sendMessage(sender, { text: 'Hi! 👋' }, { quoted: msg });
+                }
+                // 2. "Mk" දැමූ විට
+                else if (textLower === 'mk' || textLower === 'මොකද කරන්නෙ' || textLower === 'Mokada karanne') {
+                    await socket.sendMessage(sender, { text: 'Mokuth Na Innawa 😊' }, { quoted: msg });
+                }
+                // 3. "Nimsara" (හෝ ඔයාගේ නම) දැමූ විට Text එකයි Audio එකයි යන්න
+                else if (textLower.includes('Nimsara') || textLower.includes('නිම්සර')) {
+                    await socket.sendMessage(sender, { 
+                        text: 'Ow Kiyanna eya tikakin rp karai man eya hadapu bot 👨‍💻',
+                        audio: { url: 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3' }, // ඔයාගේ ඔඩියෝ ෆයිල් එක තියෙන path එක මෙතනට දෙන්න
+                        mimetype: 'audio/mp4',
+                        ptt: true // Voice note එකක් විදිහට යන්න (false දුන්නොත් සාමාන්‍ය audio file එකක් වගේ යයි)
+                    }, { quoted: msg });
+                }
+            }
+        }
+        // ==========================================
+
+
+        
+
+        
         // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා
         if (!isCommand) return;
 
@@ -345,6 +386,30 @@ function setupCommandHandlers(socket, number) {
                 }
 
 
+           case 'autoreply': {
+                    if (!msg.key.fromMe) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
+                    }
+
+                    const option = args[0] ? args[0].toLowerCase() : '';
+                    const validOptions = ['all', 'inbox', 'group', 'off'];
+                    
+                    if (!validOptions.includes(option)) {
+                        let msgText = "🤖 *Auto-Reply Settings*\n\n";
+                        msgText += `Current Mode: *${(global.autoReplyMode || 'off').toUpperCase()}*\n\n`;
+                        msgText += "Available Options:\n";
+                        msgText += "• \`.autoreply all\` - Enable for both Inbox & Groups\n";
+                        msgText += "• \`.autoread inbox\` - Enable only for Inbox (Private)\n"; // spelling check
+                        msgText += "• \`.autoreply group\` - Enable only for Groups\n";
+                        msgText += "• \`.autoreply off\` - Turn off auto-reply\n\n";
+                        msgText += `🔗 Channel: ${BOT_CHANNEL_LINK}`;
+                        return reply(msgText);
+                    }
+
+                    global.autoReplyMode = option;
+                    await reply(`✅ Auto-Reply mode successfully changed to: *${global.autoReplyMode.toUpperCase()}* ⚡`);
+                    break;
+                }
                     
 
                     
