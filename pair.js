@@ -117,23 +117,22 @@ function setupCommandHandlers(socket, number) {
                     const channelStatus = '✅ Followed';
                     
                     const captionText = `
-👋˖𖹭⸼ ${botName.toUpperCase()} 𝗑 𝗆𝗂𝗇𝗂 🎀⊹
-─𝗍𝗁𝖾 𝗎𝗅𝗍𝗂𝗆𝖺𝗍𝖾 𝗐𝗁𝖺𝗍𝗌𝖺𝗉𝗉 𝖻𝗈𝗍 𝖾𝗑𝗉𝖾𝗋𝗂𝖾𝗇𝖈𝖾˚⟡˖ ࣪
+*👋${botName.toUpperCase()} 🧛🏻*
+*--  T𝗁𝖾 mini W𝗁𝖺𝗍𝗌𝖺𝗉𝗉 B𝗈𝗍 E𝗑𝗉𝖾𝗋𝗂𝖾𝗇𝖈𝖾 --*
 
-⣀⠤⢤
-⢠⠒⠒⠲⡔⢺⠁    ⠘⡄ ⸼ 𝖻.𝗈𝗍!          
-⠈⣇⣀⡠⢳⠚⢿⣒⢫⡵ — (${botName.toUpperCase()} 𝗑)         
-⢠⡾⢥⡰⠃        ⠈⠑⠃   𝗆𝗂𝗇𝗂 𝖻𝗈𝗍 🖤   
-      ⠘⠁⋆. 𐙚 ˚𝗉𝗈𝗐𝖾𝗋 • 𝗌𝗉𝖾𝖾𝖽 • 𝖿𝗎𝗇
-      
-╭╮꒰ 𝗯𝗼𝘁 𝘀𝘁𝗮𝘁𝘂𝘀 ꒱ ─┈
-┃֪ ⚘ ִ ׄ𝅄 𝗇𝖺𝗆𝖾 : ${botName}
-┃֪ ⚘ ִ ׄ𝅄 𝗎𝗉𝗍𝗂𝗆𝖾 : ${hours}h ${minutes}m ${seconds}s
-┃֪ ⚘ ִ ׄ𝅄 𝗁𝗈𝗌𝗍 : RENDER
-┃֪ ⚘ ִ ׄ𝅄 𝖺𝖼𝗍𝗂𝗏𝖾 𝗌𝖾𝗌𝗌𝗂𝗈𝗇 : ${activeSockets.size}
-┃֪ ⚘ ִ ׄ𝅄 𝖼𝗁𝖺𝗇𝗇𝖾𝗅 : ${channelStatus}
-┃֪ ⚘ ִ ׄ𝅄 𝖼𝗋𝖾𝖽𝗂𝗍 𝖻𝗒 : NIMSARA
-╰╮─────────── 🍃
+> Created By Nimsara 🧛🏻
+> 🪀 Contact -0784280074
+ (${botName.toUpperCase()} 🧛🏻)         
+
+──────────────────────       
+*BOT STATUS 👾*
+> Bot Name : ${botName}
+> Run Time : ${hours}h ${minutes}m ${seconds}s
+> Host : RENDER
+> Activers : ${activeSockets.size}
+> Bot Channel : ${channelStatus}
+> Bot Creator : NIMSARA
+──────────────────────  
 
 *╭─\`💠 𝗕𝗢𝗧  𝗨𝗡𝗧𝗜𝗟𝗜𝗧𝗬...⚙️\`┈⊷*
 *╎*
