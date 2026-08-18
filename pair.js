@@ -236,15 +236,7 @@ function setupCommandHandlers(socket, number) {
                   }
 
                 case 'mode': {
-                    // Owner ge number eka saha msg eka ewwa kenage number eka clean karala gannawa
-                    const cleanSender = sender.split('@')[0].split(':')[0];
-                    const cleanBotNumber = socket.user.id.split('@')[0].split(':')[0];
-                    
-                    // Debug karala balanna console eke print wenawa (render logs wala balanna puluwan)
-                    console.log("Sender:", cleanSender, "Bot Owner:", cleanBotNumber);
-
-                    // Bot connect කරපු number එක (Owner) නෙමෙයි නම් විතරක් block කරනවා
-                    if (cleanSender !== cleanBotNumber) {
+                    if (!msg.key.fromMe) {
                         return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
                     }
 
@@ -252,7 +244,15 @@ function setupCommandHandlers(socket, number) {
                     const validModes = ['public', 'group', 'inbox', 'private'];
                     
                     if (!validModes.includes(option)) {
-                        return reply(`⚙️ *Bot Mode Settings*\n\nCurrent Mode: *${botMode.toUpperCase()}*\n\nAvailable Modes:\n• \`.mode public\` - Works everywhere\n• \`.mode group\` - Works only in Groups\n• \`.mode inbox\` - Works only in Inbox\n• \`.mode private\` - Works only for Owner\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        let msgText = "⚙️ *Bot Mode Settings*\n\n";
+                        msgText += `Current Mode: *${botMode.toUpperCase()}*\n\n`;
+                        msgText += "Available Modes:\n";
+                        msgText += "• \`.mode public\`\n";
+                        msgText += "• \`.mode group\`\n";
+                        msgText += "• \`.mode inbox\`\n";
+                        msgText += "• \`.mode private\`\n\n";
+                        msgText += `🔗 Channel: ${BOT_CHANNEL_LINK}`;
+                        return reply(msgText);
                     }
 
                     botMode = option;
