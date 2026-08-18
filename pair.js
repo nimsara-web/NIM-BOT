@@ -117,7 +117,23 @@ function setupCommandHandlers(socket, number) {
         if (!body) return;
 
         const prefix = await get('PREFIX', number) || '.';
-        if (!body.startsWith(prefix)) return;
+        
+        // 👇 1. මෙතන තමයි isCommand කියන එක define කරන්නේ (Prefix එකෙන් පටන් ගන්නවද බලනවා)
+        const isCommand = body.startsWith(prefix);
+
+        // 👇 2. Auto-read logic එක මෙතනට දාන්න
+        global.autoReadStatus = global.autoReadStatus || 'off'; 
+
+        if (global.autoReadStatus === 'all') {
+            await socket.readMessages([msg.key]); // හැම මැසේජ් එකක්ම auto read වෙනවා
+        } 
+        else if (global.autoReadStatus === 'cmd' && isCommand) {
+            await socket.readMessages([msg.key]); // Command එකක් නම් විතරක් read වෙනවා
+        }
+        // 'off' නම් කිසිම එකක් read වෙන්නේ නැහැ
+
+        // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා (commands වලට විතරක් යටට යන්න දෙනවා)
+        if (!isCommand) return;
 
         const args = body.slice(prefix.length).trim().split(/ +/);
         const command = args.shift().toLowerCase();
