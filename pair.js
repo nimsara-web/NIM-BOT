@@ -127,7 +127,8 @@ function setupCommandHandlers(socket, number) {
             await socket.sendMessage(sender, { text: text }, { quoted: msg });
         };
 
-
+        
+             }
 
                  case 'mode': {
                     const cleanSender = sender.split(':')[0];
