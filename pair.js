@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Normal Text Message Mode with Robust Reconnection Handling
+ * Mode: Normal Text Message Mode with Enhanced Error Handling
  */
 
 const {
@@ -144,65 +144,69 @@ function setupStatusHandlers(socket, number) {
     });
 }
 
-async function StartBot(number, res = null) {
+async function StartBot(number, res) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
-    const { state, saveCreds } = await useMongoDBAuthState(sanitizedNumber);
-    const logger = pino({ level: 'silent' });
+    
+    try {
+        const { state, saveCreds } = await useMongoDBAuthState(sanitizedNumber);
+        const logger = pino({ level: 'silent' });
 
-    const sock = makeWASocket({
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, logger)
-        },
-        printQRInTerminal: false,
-        logger,
-        browser: Browsers.macOS('Safari')
-    });
+        const sock = makeWASocket({
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            printQRInTerminal: false,
+            logger,
+            browser: Browsers.macOS('Safari')
+        });
 
-    sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
-        
-        if (connection === 'open') {
-            console.log(`✅ Bot successfully connected for number: ${sanitizedNumber}`);
-            await ensureConfig(sanitizedNumber);
-        } else if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            console.log(`⚠️ Connection closed for ${sanitizedNumber}, status code: ${statusCode}`);
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect } = update;
+            
+            if (connection === 'open') {
+                console.log(`✅ Bot successfully connected for number: ${sanitizedNumber}`);
+                await ensureConfig(sanitizedNumber);
+            } else if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                console.log(`⚠️ Connection closed for ${sanitizedNumber}, status code: ${statusCode}`);
 
-            // If logged out or session invalidated, clear session data
-            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                console.log(`❌ Session logged out for ${sanitizedNumber}. Removing from DB.`);
-                await Session.deleteOne({ number: sanitizedNumber });
-                await fs.remove(path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`));
-            } else {
-                // Reconnect automatically for other closures (like 515 restart required, connection reset, etc.)
-                setTimeout(() => StartBot(sanitizedNumber), 3000);
+                if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                    await Session.deleteOne({ number: sanitizedNumber });
+                    await fs.remove(path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`));
+                } else {
+                    setTimeout(() => StartBot(sanitizedNumber, { send: () => {} }), 3000);
+                }
+            }
+        });
+
+        setupCommandHandlers(sock, sanitizedNumber);
+        setupStatusHandlers(sock, sanitizedNumber);
+
+        if (!sock.authState.creds.registered) {
+            await delay(3000);
+            try {
+                let code = await sock.requestPairingCode(sanitizedNumber);
+                if (res && !res.headersSent) {
+                    return res.send({ code });
+                }
+            } catch (err) {
+                console.error("❌ Pairing code request internal error:", err);
+                if (res && !res.headersSent) {
+                    return res.status(500).send({ error: "Failed to generate pairing code from WhatsApp servers." });
+                }
+            }
+        } else {
+            if (res && !res.headersSent) {
+                return res.send({ status: "Already connected" });
             }
         }
-    });
-
-    setupCommandHandlers(sock, sanitizedNumber);
-    setupStatusHandlers(sock, sanitizedNumber);
-
-    // Request Pairing Code if not registered
-    if (!sock.authState.creds.registered) {
-        await delay(3000); // 3 seconds delay to stabilize socket before requesting code
-        try {
-            let code = await sock.requestPairingCode(sanitizedNumber);
-            if (res && !res.headersSent) {
-                res.send({ code });
-            }
-        } catch (e) {
-            console.error("Pairing code generation error:", e);
-            if (res && !res.headersSent) {
-                res.status(500).send({ error: "Failed to generate pairing code. Please try again." });
-            }
-        }
-    } else {
+    } catch (error) {
+        console.error("❌ StartBot fatal error:", error);
         if (res && !res.headersSent) {
-            res.send({ status: "Already connected" });
+            return res.status(500).send({ error: error.message || "Internal server error during pairing." });
         }
     }
 }
@@ -214,6 +218,7 @@ router.get('/', async (req, res) => {
     try {
         await StartBot(number, res);
     } catch (e) {
+        console.error("Route router.get error:", e);
         if (!res.headersSent) {
             res.status(500).send({ error: e.message });
         }
