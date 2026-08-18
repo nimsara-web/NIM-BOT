@@ -194,6 +194,7 @@ function setupCommandHandlers(socket, number) {
 🔗 Web: Pending
 
 *🏮 FOLLOW MINE CHANNEL :- ${BOT_CHANNEL_LINK}*
+
 > _MADE BY NIMSARA_
 `;
                     // Send Menu Image + Caption
@@ -413,7 +414,7 @@ function setupCommandHandlers(socket, number) {
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
                     
-                    const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY NIMSARA_`;
+                    const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n\n> _MADE BY NIMSARA_`;
                     
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
