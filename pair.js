@@ -127,31 +127,6 @@ function setupCommandHandlers(socket, number) {
             await socket.sendMessage(sender, { text: text }, { quoted: msg });
         };
 
-        
-             }
-
-                 case 'mode': {
-                    const cleanSender = sender.split(':')[0];
-                    const cleanBotNumber = socket.user.id.split(':')[0];
-                    
-                    // Bot connect කරපු number එක (Owner) නෙමෙයි නම් block කරනවා
-                    if (cleanSender !== cleanBotNumber) {
-                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
-                    }
-
-                    const option = args[0] ? args[0].toLowerCase() : '';
-                    const validModes = ['public', 'group', 'inbox', 'private'];
-                    
-                    if (!validModes.includes(option)) {
-                        return reply(`⚙️ *Bot Mode Settings*\n\nCurrent Mode: *${botMode.toUpperCase()}*\n\nAvailable Modes:\n• \`.mode public\` - Works everywhere for everyone\n• \`.mode group\` - Works only in Groups\n• \`.mode inbox\` - Works only in Inbox\n• \`.mode private\` - Works only for Bot Owner\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                    }
-
-                    botMode = option;
-                    await reply(`✅ Bot mode successfully changed to: *${botMode.toUpperCase()}* 🚀`);
-                    break;
-                }
-
-        
 
         try {
             switch (command) {
@@ -239,6 +214,34 @@ function setupCommandHandlers(socket, number) {
                         }, { quoted: msg });
                     }
                     break;
+
+
+                  }
+
+                 case 'mode': {
+                    const cleanSender = sender.split(':')[0];
+                    const cleanBotNumber = socket.user.id.split(':')[0];
+                    
+                    // Bot connect කරපු number එක (Owner) නෙමෙයි නම් block කරනවා
+                    if (cleanSender !== cleanBotNumber) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
+                    }
+
+                    const option = args[0] ? args[0].toLowerCase() : '';
+                    const validModes = ['public', 'group', 'inbox', 'private'];
+                    
+                    if (!validModes.includes(option)) {
+                        return reply(`⚙️ *Bot Mode Settings*\n\nCurrent Mode: *${botMode.toUpperCase()}*\n\nAvailable Modes:\n• \`.mode public\` - Works everywhere for everyone\n• \`.mode group\` - Works only in Groups\n• \`.mode inbox\` - Works only in Inbox\n• \`.mode private\` - Works only for Bot Owner\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+
+                    botMode = option;
+                    await reply(`✅ Bot mode successfully changed to: *${botMode.toUpperCase()}* 🚀`);
+                    break;
+                }
+
+        
+
+                    
                 }
                 case 'ping': {
                     const start = Date.now();
