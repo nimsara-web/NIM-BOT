@@ -187,7 +187,7 @@ function setupCommandHandlers(socket, number) {
 
 🔗 Web: https://pending/
 *🏮 FOLLOW MINE CHANNEL :- ${BOT_CHANNEL_LINK}*
-> _MADE BY ${botName}_
+> _MADE BY NIMSARA_
 `;
                     // Send Menu Image + Caption
                     await socket.sendMessage(sender, {
@@ -349,7 +349,7 @@ function setupCommandHandlers(socket, number) {
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
                     
-                    const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
+                    const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY NIMSARA_`;
                     
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
@@ -653,7 +653,7 @@ async function StartBot(number, res = null) {
 
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
                         image: { url: BOT_IMAGE_URL },
-                        caption: `╔═════════════════════════╗\n║  🎉 *${botName} CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\nCreator: *Nimsara*`
+                        caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> Creator: *Nimsara*`
                     });
 
                     await delay(1500);
