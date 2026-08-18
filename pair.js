@@ -241,8 +241,6 @@ function setupCommandHandlers(socket, number) {
 
         
 
-                    
-                }
                 case 'ping': {
                     const start = Date.now();
                     const sentMsg = await socket.sendMessage(sender, { text: 'Pinging...' }, { quoted: msg });
