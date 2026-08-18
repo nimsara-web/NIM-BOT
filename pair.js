@@ -24,6 +24,8 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
+let botMode = 'public'; // Default mode eka
+
 const Session = require('./Id'); 
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb'); 
 
@@ -125,6 +127,31 @@ function setupCommandHandlers(socket, number) {
             await socket.sendMessage(sender, { text: text }, { quoted: msg });
         };
 
+
+
+                 case 'mode': {
+                    const cleanSender = sender.split(':')[0];
+                    const cleanBotNumber = socket.user.id.split(':')[0];
+                    
+                    // Bot connect කරපු number එක (Owner) නෙමෙයි නම් block කරනවා
+                    if (cleanSender !== cleanBotNumber) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
+                    }
+
+                    const option = args[0] ? args[0].toLowerCase() : '';
+                    const validModes = ['public', 'group', 'inbox', 'private'];
+                    
+                    if (!validModes.includes(option)) {
+                        return reply(`⚙️ *Bot Mode Settings*\n\nCurrent Mode: *${botMode.toUpperCase()}*\n\nAvailable Modes:\n• \`.mode public\` - Works everywhere for everyone\n• \`.mode group\` - Works only in Groups\n• \`.mode inbox\` - Works only in Inbox\n• \`.mode private\` - Works only for Bot Owner\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+
+                    botMode = option;
+                    await reply(`✅ Bot mode successfully changed to: *${botMode.toUpperCase()}* 🚀`);
+                    break;
+                }
+
+        
+
         try {
             switch (command) {
                 case 'allmenu':
@@ -157,35 +184,39 @@ function setupCommandHandlers(socket, number) {
 
 *╭─\`💠 𝗕𝗢𝗧  𝗨𝗡𝗧𝗜𝗟𝗜𝗧𝗬...⚙️\`┈⊷*
 *╎*
-*╎🏷️ᴄᴍᴅ - .alive*
+*╎📍ᴄᴍᴅ - .alive*
 *╎🔖 ᴅᴇꜱᴄ- Show bot status.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .status*
+*╎📍ᴄᴍᴅ - .status*
 *╎🔖 ᴅᴇꜱᴄ- Check bot status.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .ping*
+*╎📍ᴄᴍᴅ - .ping*
 *╎🔖 ᴅᴇꜱᴄ- Check response time.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .runtime*
+*╎📍ᴄᴍᴅ - .runtime*
 *╎🔖 ᴅᴇꜱᴄ- Show bot uptime.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .settings*
+*╎📍ᴄᴍᴅ - .settings*
 *╎🔖 ᴅᴇꜱᴄ- Manage bot settings (Auto status/Online).*
 *╎*
-*╎🏷️ᴄᴍᴅ - .setprefix*
+*╎📍ᴄᴍᴅ - .setprefix*
 *╎🔖 ᴅᴇꜱᴄ- Change bot command prefix.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .send*
+*╎📍ᴄᴍᴅ - .send*
 *╎🔖 ᴅᴇꜱᴄ- Download/Save quoted status or media.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .vv*
+*╎📍ᴄᴍᴅ - .mode public/group/inbox/private*
+*╎🔖 ᴅᴇꜱᴄ- Bot Run Mode.*
+*╎*
+*╎📍ᴄᴍᴅ - .vv*
 *╎🔖 ᴅᴇꜱᴄ- Download View Once image or video.*
 *╎*
 *╎🏷️ᴄᴍᴅ - .owner*
 *╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
 *╰───────────────────────*
 
-🔗 Web: https://pending/
+🔗 Web: Pending
+
 *🏮 FOLLOW MINE CHANNEL :- ${BOT_CHANNEL_LINK}*
 > _MADE BY NIMSARA_
 `;
@@ -216,6 +247,33 @@ function setupCommandHandlers(socket, number) {
                     break;
                 }
 
+
+
+// --- BOT MODE RESTRICTION CHECK ---
+                const isGroup = from.endsWith('@g.us');
+                const cleanSender = sender.split(':')[0];
+                const cleanBotNumber = socket.user.id.split(':')[0];
+                const isOwner = (cleanSender === cleanBotNumber);
+
+                // Owner හැර වෙන කෙනෙක් නම්, mode එක අනුව block කරනවා:
+                if (!isOwner) {
+                    // 1. Private Mode: Owner හැလෙන්න වෙන කවුරුත් bot පාවිච්චි කරන්න බෑ
+                    if (botMode === 'private') {
+                        return; // Silent block (reply nokara inna puluwan)
+                    }
+                    // 2. Group Mode: Inbox එකෙන් එවපු ඒවා block කරනවා
+                    if (botMode === 'group' && !isGroup) {
+                        return;
+                    }
+                    // 3. Inbox Mode: Group එකෙන් එවපු ඒවා block කරනවා
+                    if (botMode === 'inbox' && isGroup) {
+                        return;
+                    }
+                }
+
+
+
+                    
 
     case 'song': {
                     const query = args.join(' ');
