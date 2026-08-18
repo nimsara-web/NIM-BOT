@@ -295,6 +295,40 @@ function setupCommandHandlers(socket, number) {
 
 
 
+
+                    case 'autoread': {
+                    const cleanSender = sender.split('@')[0].split(':')[0];
+                    const cleanBotNumber = socket.user?.id ? socket.user.id.split('@')[0].split(':')[0] : '';
+                    const myPersonalNumber = ""; // ඔයාගේ Personal number එක දාන්න ඕන නම් මෙතන දාන්න (උදා: "94*****")
+                    
+                    const isOwner = (cleanSender === cleanBotNumber) || (myPersonalNumber && cleanSender === myPersonalNumber);
+
+                    if (!isOwner) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
+                    }
+
+                    const option = args[0] ? args[0].toLowerCase() : '';
+                    const validOptions = ['all', 'cmd', 'off'];
+                    
+                    if (!validOptions.includes(option)) {
+                        let msgText = "👀 *Auto-Read Settings*\n\n";
+                        msgText += `Current Auto-Read: *${(global.autoReadStatus || 'off').toUpperCase()}*\n\n`;
+                        msgText += "Available Options:\n";
+                        msgText += "• \`.autoread all\` - Read all incoming messages\n";
+                        msgText += "• \`.autoread cmd\` - Read only commands\n";
+                        msgText += "• \`.autoread off\` - Turn off auto-read\n\n";
+                        msgText += `🔗 Channel: ${BOT_CHANNEL_LINK}`;
+                        return reply(msgText);
+                    }
+
+                    global.autoReadStatus = option;
+                    await reply(`✅ Auto-Read mode successfully changed to: *${global.autoReadStatus.toUpperCase()}* 👁️‍🗨️`);
+                    break;
+                }
+
+
+                    
+
                     
 
     case 'song': {
