@@ -134,7 +134,7 @@ function setupCommandHandlers(socket, number) {
         // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා
         if (!isCommand) return;
 
-        // 4. BOT MODE CHECK එක
+      // 4. BOT MODE CHECK එක
         const isOwner = msg.key.fromMe;
         const isGroup = sender.endsWith('@g.us');
 
@@ -148,8 +148,20 @@ function setupCommandHandlers(socket, number) {
         const command = args.shift().toLowerCase();
         const botName = await get('BOT_NAME', number) || 'NIM BOT';
 
+        // 👇 මෙන්න මෙතනට channel forwarding එකත් එක්ක reply function එක හැදුවා
         const reply = async (text) => {
-            await socket.sendMessage(sender, { text: text }, { quoted: msg });
+            await socket.sendMessage(sender, { 
+                text: text,
+                contextInfo: {
+                    forwardingScore: 999,
+                    isForwarded: true,
+                    forwardedNewsletterMessageInfo: {
+                        newsletterJid: '120363362308230584@newsletter',
+                        newsletterName: 'NIM BOT Channel', // (ඔයාට කැමති නම් වෙනස් කරගන්න පුළුවන්)
+                        serverMessageId: 1
+                    }
+                }
+            }, { quoted: msg });
         };
 
         try {
