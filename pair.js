@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu + Images)
+ * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu + Image + Voice Note)
  */
 
 const {
@@ -25,6 +25,7 @@ const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb');
 
 const SESSION_BASE_PATH = path.join(__dirname, './sessions');
 const BOT_IMAGE_URL = 'https://res.cloudinary.com/dqlh378fb/image/upload/v1787035957/zanta_media_uploads/c9qlcgvmwlcuf7oyb8be.jpg';
+const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
 
 // Global tracking maps
 const socketCreationTime = new Map();
@@ -168,9 +169,17 @@ function setupCommandHandlers(socket, number) {
 *🏮 FOLLOW MINE CHANNEL :- https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r*
 > _MADE BY NIMSARA_
 `;
+                    // Send Menu Image + Caption
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
                         caption: captionText.trim()
+                    }, { quoted: msg });
+
+                    // Send Voice Note
+                    await socket.sendMessage(sender, {
+                        audio: { url: BOT_AUDIO_URL },
+                        mimetype: 'audio/mp4',
+                        ptt: true
                     }, { quoted: msg });
                     break;
                 }
@@ -191,9 +200,17 @@ function setupCommandHandlers(socket, number) {
                     
                     const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara`;
                     
+                    // Send Alive Image + Caption
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
                         caption: aliveText
+                    }, { quoted: msg });
+
+                    // Send Voice Note
+                    await socket.sendMessage(sender, {
+                        audio: { url: BOT_AUDIO_URL },
+                        mimetype: 'audio/mp4',
+                        ptt: true
                     }, { quoted: msg });
                     break;
                 }
@@ -368,7 +385,7 @@ async function StartBot(number, res = null) {
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
 
-                // Send Connected Welcome Message with Image to the owner's chat
+                // Send Connected Welcome Message + Image & Voice Note to owner's chat
                 try {
                     await delay(2000);
                     let botName = 'NIM BOT';
@@ -378,9 +395,17 @@ async function StartBot(number, res = null) {
                         currentPrefix = await get('PREFIX', sanitizedNumber) || '.';
                     } catch (e) {}
 
+                    // Send Connected Image Message
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
                         image: { url: BOT_IMAGE_URL },
                         caption: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\nCreator: *Nimsara*`
+                    });
+
+                    // Send Voice Note on Connect
+                    await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
+                        audio: { url: BOT_AUDIO_URL },
+                        mimetype: 'audio/mp4',
+                        ptt: true
                     });
                 } catch (err) {
                     console.log("Failed to send connect message:", err.message);
