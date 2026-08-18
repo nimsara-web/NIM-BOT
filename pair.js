@@ -133,9 +133,9 @@ function setupCommandHandlers(socket, number) {
 
 
 // ==========================================
-        // 🤖 AUTO-REPLY LOGIC (කවුරුහරි මැසේජ් දැමූ විට)
+        // 🤖 AUTO-REPLY LOGIC (පැහැදිලිව සහ නිවැරදිව වැඩ කිරීමට)
         // ==========================================
-        global.autoReplyMode = global.autoReplyMode || 'off'; // 'all', 'inbox', 'group', 'off'
+        global.autoReplyMode = global.autoReplyMode || 'off'; 
 
         if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
             const isGroup = sender.endsWith('@g.us');
@@ -147,25 +147,35 @@ function setupCommandHandlers(socket, number) {
             if (shouldAutoReply) {
                 const textLower = body.toLowerCase().trim();
 
-                // 1. "Hi" හෝ "හායි" අඩංගු නම්
-                if (textLower.includes('Hi') || textLower.includes('හායි')) {
+                // 1. "Hi" හෝ "හායි" හෝ "Hello" දැමූ විට
+                if (textLower.includes('hi') || textLower.includes('හායි') || textLower.includes('hello')) {
                     await socket.sendMessage(sender, { text: 'Hi! 👋' }, { quoted: msg });
                 }
-                // 2. "Mk" හෝ "මොකද" අඩංගු නම්
-                else if (textLower.includes('Mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada')) {
+                // 2. "Mk" හෝ "මොකද" දැමූ විට
+                else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada')) {
                     await socket.sendMessage(sender, { text: 'Mokuth Na innwa oya mokada karanne😊' }, { quoted: msg });
                 }
-                // 3. "Nimsara" හෝ "නිම්සර" අඩංගු නම්
-                else if (textLower.includes('Nimsara') || textLower.includes('නිම්සර')) {
+                // 3. "Nimsara" හෝ "නිම්සර" දැමූ විට Text එකයි Audio එකයි යන්න
+                else if (textLower.includes('nimsara') || textLower.includes('නිම්සර')) {
                     try {
-                        await socket.sendMessage(sender, { 
-                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
-                            audio: { url: 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3' },
-                            mimetype: 'audio/mp4',
-                            ptt: true 
-                        }, { quoted: msg });
+                        const fs = require('fs');
+                        const audioPath = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3'; // (ඔයාගේ ඕඩියෝ ෆයිල් එක තියෙන තැන)
+
+                        // ෆයිල් එක සර්වර් එකේ ඇත්තටම තියෙනවද කියලා චෙක් කරනවා
+                        if (fs.existsSync(audioPath)) {
+                            await socket.sendMessage(sender, { 
+                                text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
+                                audio: fs.readFileSync(audioPath), // 👈 Buffer එකක් විදිහට යවනවා (Render වලට පට්ටට වැඩ)
+                                mimetype: 'audio/mp4',
+                                ptt: true // Voice Note එකක් ලෙස යැවීමට
+                            }, { quoted: msg });
+                        } else {
+                            // ෆයිල් එක හම්බුණේ නැත්නම් ටෙක්ස්ට් එක විතරක් යවලා ලොග් එකක් දානවා
+                            console.log('⚠️ Audio file not found at:', audioPath);
+                            await socket.sendMessage(sender, { text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎' }, { quoted: msg });
+                        }
                     } catch (err) {
-                        // ඕඩියෝ ෆයිල් එක නැති වුණොත් error එකක් නොදී ටෙක්ස්ට් එක විතරක් යවන්න
+                        console.error('Audio send error:', err);
                         await socket.sendMessage(sender, { text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎' }, { quoted: msg });
                     }
                 }
