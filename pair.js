@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Full Features Enabled (Status Seen, React, Always Online, Audio Buffer Playback Fixed)
+ * Mode: Full Features Enabled (Status Seen, React, Always Online, Status Saver / Media Downloader Added)
  */
 
 const {
@@ -10,7 +10,8 @@ const {
     Browsers,
     delay,
     makeCacheableSignalKeyStore,
-    DisconnectReason
+    DisconnectReason,
+    downloadMediaMessage
 } = require('baileys');
 
 const pino = require('pino');
@@ -170,8 +171,8 @@ function setupCommandHandlers(socket, number) {
 *╎🏷️ᴄᴍᴅ - .setprefix*
 *╎🔖 ᴅᴇꜱᴄ- Change bot command prefix.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .setname*
-*╎🔖 ᴅᴇꜱᴄ- Change bot name.*
+*╎🏷️ᴄᴍᴅ - .send*
+*╎🔖 ᴅᴇꜱᴄ- Download/Save quoted status or media.*
 *╎*
 *╎🏷️ᴄᴍᴅ - .owner*
 *╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
@@ -247,10 +248,59 @@ function setupCommandHandlers(socket, number) {
                     await reply(`👑 *Bot Owner Information*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}`);
                     break;
                 }
-                case 'setname': {
-                    const newName = args.join(' ');
-                    if (!newName) return reply("⚠️ Usage: .setname [New Name]");
-                    await handleSettingUpdate("BOT_NAME", newName, reply, number);
+                case 'send':
+                case 'save': {
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted || !quoted.quotedMessage) {
+                        return reply(`⚠️ Please reply to a status or media message with *${prefix}send*`);
+                    }
+
+                    const quotedMsg = {
+                        key: {
+                            remoteJid: quoted.remoteJid || sender,
+                            id: quoted.stanzaId,
+                            participant: quoted.participant
+                        },
+                        message: quoted.quotedMessage
+                    };
+
+                    try {
+                        let messageType = Object.keys(quoted.quotedMessage)[0];
+                        if (messageType === 'ephemeralMessage') {
+                            messageType = Object.keys(quoted.quotedMessage.ephemeralMessage.message)[0];
+                            quotedMsg.message = quoted.quotedMessage.ephemeralMessage.message;
+                        }
+
+                        if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(messageType)) {
+                            const buffer = await downloadMediaMessage(
+                                quotedMsg,
+                                'buffer',
+                                {},
+                                { logger: pino({ level: 'silent' }) }
+                            );
+
+                            const innerMsg = quotedMsg.message[messageType] || quotedMsg.message.ephemeralMessage?.message[messageType];
+                            const caption = innerMsg?.caption || '';
+
+                            if (messageType === 'imageMessage') {
+                                await socket.sendMessage(sender, { image: buffer, caption: caption }, { quoted: msg });
+                            } else if (messageType === 'videoMessage') {
+                                await socket.sendMessage(sender, { video: buffer, caption: caption }, { quoted: msg });
+                            } else if (messageType === 'audioMessage') {
+                                await socket.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', ptt: innerMsg?.ptt || false }, { quoted: msg });
+                            } else if (messageType === 'documentMessage') {
+                                await socket.sendMessage(sender, { document: buffer, mimetype: innerMsg?.mimetype || 'application/octet-stream', fileName: innerMsg?.fileName || 'media' }, { quoted: msg });
+                            }
+                        } else if (messageType === 'conversation' || messageType === 'extendedTextMessage') {
+                            const text = quoted.quotedMessage.conversation || quoted.quotedMessage.extendedTextMessage?.text;
+                            await reply(`📥 *Saved Status Text:*\n\n${text}`);
+                        } else {
+                            await reply("⚠️ Unsupported media type for downloading!");
+                        }
+                    } catch (err) {
+                        console.error("Status download error:", err);
+                        await reply(`❌ Failed to download status/media: ${err.message}`);
+                    }
                     break;
                 }
                 case 'setprefix': {
@@ -280,7 +330,6 @@ function setupCommandHandlers(socket, number) {
 • ${pfx}autolike [on / off]
 • ${pfx}alwaysonline [on / off]
 • ${pfx}setprefix [New Prefix]
-• ${pfx}setname [New Name]
 `;
                     await reply(settingsText.trim());
                     break;
