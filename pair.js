@@ -102,9 +102,11 @@ function getMessageBody(msg) {
     if (message.viewOnceMessageV2) message = message.viewOnceMessageV2.message;
 
     return message.conversation || 
-           message.extendedTextMessage?.text || 
-           message.imageMessage?.caption || 
-           message.videoMessage?.caption || '';
+            message.extendedTextMessage?.text || 
+            message.imageMessage?.caption || 
+            message.videoMessage?.caption || '';
+} // 👈 මේ බ්‍රැකට් එක තමයි අමතක වෙලා තිබුණේ!
+
 function setupCommandHandlers(socket, number) {
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
@@ -115,39 +117,32 @@ function setupCommandHandlers(socket, number) {
         if (!body) return;
 
         const prefix = await get('PREFIX', number) || '.';
-
-
         
-        
-        // 👇 1. මෙතන තමයි isCommand කියන එක define කරන්නේ (Prefix එකෙන් පටන් ගන්නවද බලනවා)
+        // 1. isCommand define කරනවා
         const isCommand = body.startsWith(prefix);
 
-        // 👇 2. Auto-read logic එක මෙතනට දාන්න
+        // 2. Auto-read logic එක
         global.autoReadStatus = global.autoReadStatus || 'off'; 
 
         if (global.autoReadStatus === 'all') {
-            await socket.readMessages([msg.key]); // හැම මැසේජ් එකක්ම auto read වෙනවා
+            await socket.readMessages([msg.key]); 
         } 
         else if (global.autoReadStatus === 'cmd' && isCommand) {
-            await socket.readMessages([msg.key]); // Command එකක් නම් විතරක් read වෙනවා
+            await socket.readMessages([msg.key]); 
         }
-        // 'off' නම් කිසිම එකක් read වෙන්නේ නැහැ
 
-        // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා (commands වලට විතරක් යටට යන්න දෙනවා)
+        // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා
         if (!isCommand) return;
 
-        // ========================================================
-        // 👇 4. BOT MODE CHECK එක හරියටම මෙතනට දාන්න (ඔන්න ඔය අලුත් කෑල්ල)
-        // ========================================================
+        // 4. BOT MODE CHECK එක
         const isOwner = msg.key.fromMe;
         const isGroup = sender.endsWith('@g.us');
 
         if (!isOwner) {
-            if (botMode === 'private') return;                 // Private නම් Owner ට විතරයි
-            if (botMode === 'group' && !isGroup) return;       // Group mode නම් Group වලට විතරයි
-            if (botMode === 'inbox' && isGroup) return;        // Inbox mode නම් Private chat වලට විතරයි
+            if (botMode === 'private') return;                 
+            if (botMode === 'group' && !isGroup) return;       
+            if (botMode === 'inbox' && isGroup) return;        
         }
-        // ========================================================
 
         const args = body.slice(prefix.length).trim().split(/ +/);
         const command = args.shift().toLowerCase();
@@ -157,12 +152,6 @@ function setupCommandHandlers(socket, number) {
             await socket.sendMessage(sender, { text: text }, { quoted: msg });
         };
 
-
-
-
-
-
-        
         try {
             switch (command) {
                 case 'allmenu':
