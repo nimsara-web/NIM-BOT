@@ -1,0 +1,20 @@
+{
+  "name": "nim-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Multi-Device Bot created by Nimsara",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.13",
+    "axios": "^1.6.8",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "fs-extra": "^11.2.0",
+    "mongoose": "^8.3.1",
+    "pino": "^8.20.0"
+  }
+}
