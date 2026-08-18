@@ -217,7 +217,7 @@ function setupCommandHandlers(socket, number) {
                 }
 
 
-case 'song': {
+    case 'song': {
                     const query = args.join(' ');
                     if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     
@@ -229,13 +229,13 @@ case 'song': {
 
                         await reply(`🎵 Found: *${video.title}*\n⏱️ Duration: ${video.timestamp}\n📥 Downloading audio, please wait...`);
 
-                        // Alternative stable API to bypass 451/IP blocks
-                        const apiRes = await axios.get(`https://api.siputzx.my.id/api/downloader/ytmp3?url=${encodeURIComponent(video.url)}`);
-                        if (!apiRes.data || !apiRes.data.status) {
+                        // Using Itzpire stable API
+                        const apiRes = await axios.get(`https://itzpire.com/download/ytmp3?url=${encodeURIComponent(video.url)}`);
+                        if (!apiRes.data || !apiRes.data.status || !apiRes.data.data.audio) {
                             return reply(`❌ Download failed from API. Try again later.`);
                         }
 
-                        const audioUrl = apiRes.data.data.dl || apiRes.data.data.download;
+                        const audioUrl = apiRes.data.data.audio;
 
                         await socket.sendMessage(sender, {
                             audio: { url: audioUrl },
@@ -259,35 +259,24 @@ case 'song': {
                     }
                     break;
                 }
-                    
 
-              case 'tt':
+                case 'tt':
                 case 'tiktok': {
                     const url = args[0];
                     if (!url || !url.includes('tiktok.com')) {
                         return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
 
-                    await reply(`📥 Downloading TikTok video in HD quality... Please wait ⏳`);
+                    await reply(`📥 Downloading TikTok video... Please wait ⏳`);
                     try {
-                        // Using POST request to bypass 403 Forbidden errors on Render
-                        const response = await axios.post('https://www.tikwm.com/api/', {
-                            url: url,
-                            hd: 1
-                        }, {
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                                'Referer': 'https://www.tikwm.com/'
-                            }
-                        });
+                        // Using Itzpire TikTok downloader API to bypass 403 blocks
+                        const response = await axios.get(`https://itzpire.com/download/tiktok?url=${encodeURIComponent(url)}`);
+                        const resData = response.data;
 
-                        const data = response.data;
-
-                        if (data && data.code === 0 && data.data) {
-                            const videoUrl = data.data.hdplay || data.data.play;
-                            const title = data.data.title || 'TikTok Video';
-                            const author = data.data.author?.nickname || 'Unknown';
+                        if (resData && resData.status && resData.data) {
+                            const videoUrl = resData.data.video_hd || resData.data.video || resData.data.play;
+                            const title = resData.data.title || 'TikTok Video';
+                            const author = resData.data.author || 'Unknown';
 
                             const caption = `🎬 *TikTok Video Downloaded*\n\n📝 Title: ${title}\n👤 Author: ${author}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
 
@@ -304,9 +293,8 @@ case 'song': {
                     }
                     break;
                 }
-                    
-                    
-               case 'yt':
+
+                case 'yt':
                 case 'youtube': {
                     const url = args[0];
                     const type = args[1] ? args[1].toLowerCase() : 'video';
@@ -319,10 +307,10 @@ case 'song': {
                         await reply(`📥 Processing YouTube download... Please wait ⏳`);
                         
                         if (type === 'audio') {
-                            const apiRes = await axios.get(`https://api.siputzx.my.id/api/downloader/ytmp3?url=${encodeURIComponent(url)}`);
+                            const apiRes = await axios.get(`https://itzpire.com/download/ytmp3?url=${encodeURIComponent(url)}`);
                             if (!apiRes.data || !apiRes.data.status) return reply(`❌ Failed to fetch audio.`);
                             
-                            const audioUrl = apiRes.data.data.dl || apiRes.data.data.download;
+                            const audioUrl = apiRes.data.data.audio;
                             const title = apiRes.data.data.title || 'YouTube Audio';
 
                             await socket.sendMessage(sender, {
@@ -333,10 +321,10 @@ case 'song': {
                             }, { quoted: msg });
 
                         } else {
-                            const apiRes = await axios.get(`https://api.siputzx.my.id/api/downloader/ytmp4?url=${encodeURIComponent(url)}`);
+                            const apiRes = await axios.get(`https://itzpire.com/download/ytmp4?url=${encodeURIComponent(url)}`);
                             if (!apiRes.data || !apiRes.data.status) return reply(`❌ Failed to fetch video.`);
                             
-                            const videoUrl = apiRes.data.data.dl || apiRes.data.data.download;
+                            const videoUrl = apiRes.data.data.url;
                             const title = apiRes.data.data.title || 'YouTube Video';
 
                             await socket.sendMessage(sender, {
