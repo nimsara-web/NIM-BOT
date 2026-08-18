@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Normal Text Message Mode with Enhanced Error Handling
+ * Mode: Fixed JSON & Safe Res Handling
  */
 
 const {
@@ -34,7 +34,11 @@ async function useMongoDBAuthState(number) {
     const credsPath = path.join(sessionDir, 'creds.json');
     
     if (dbData && dbData.creds) {
-        await fs.writeJson(credsPath, dbData.creds, { spaces: 2 });
+        try {
+            await fs.writeJson(credsPath, dbData.creds, { spaces: 2 });
+        } catch (e) {
+            console.error("Error writing initial creds from DB:", e);
+        }
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -45,14 +49,18 @@ async function useMongoDBAuthState(number) {
             await saveCreds();
             if (await fs.pathExists(credsPath)) {
                 try {
-                    const credsData = await fs.readJson(credsPath);
-                    await Session.findOneAndUpdate(
-                        { number: sanitizedNumber },
-                        { creds: credsData, updatedAt: new Date() },
-                        { upsert: true, new: true }
-                    );
+                    // Read file safely and check if valid JSON before saving to MongoDB
+                    const rawData = await fs.readFile(credsPath, 'utf8');
+                    if (rawData && rawData.trim() !== '') {
+                        const credsData = JSON.parse(rawData);
+                        await Session.findOneAndUpdate(
+                            { number: sanitizedNumber },
+                            { creds: credsData, updatedAt: new Date() },
+                            { upsert: true, new: true }
+                        );
+                    }
                 } catch (e) {
-                    console.error("Error saving creds to MongoDB:", e);
+                    console.error("Skipped saving corrupted creds.json to MongoDB:", e.message);
                 }
             }
         }
@@ -144,7 +152,7 @@ function setupStatusHandlers(socket, number) {
     });
 }
 
-async function StartBot(number, res) {
+async function StartBot(number, res = null) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
     
     try {
@@ -177,7 +185,7 @@ async function StartBot(number, res) {
                     await Session.deleteOne({ number: sanitizedNumber });
                     await fs.remove(path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`));
                 } else {
-                    setTimeout(() => StartBot(sanitizedNumber, { send: () => {} }), 3000);
+                    setTimeout(() => StartBot(sanitizedNumber), 3000);
                 }
             }
         });
@@ -189,23 +197,23 @@ async function StartBot(number, res) {
             await delay(3000);
             try {
                 let code = await sock.requestPairingCode(sanitizedNumber);
-                if (res && !res.headersSent) {
+                if (res && typeof res.send === 'function' && !res.headersSent) {
                     return res.send({ code });
                 }
             } catch (err) {
-                console.error("❌ Pairing code request internal error:", err);
-                if (res && !res.headersSent) {
+                console.error("❌ Pairing code request internal error:", err.message);
+                if (res && typeof res.status === 'function' && !res.headersSent) {
                     return res.status(500).send({ error: "Failed to generate pairing code from WhatsApp servers." });
                 }
             }
         } else {
-            if (res && !res.headersSent) {
+            if (res && typeof res.send === 'function' && !res.headersSent) {
                 return res.send({ status: "Already connected" });
             }
         }
     } catch (error) {
-        console.error("❌ StartBot fatal error:", error);
-        if (res && !res.headersSent) {
+        console.error("❌ StartBot fatal error:", error.message);
+        if (res && typeof res.status === 'function' && !res.headersSent) {
             return res.status(500).send({ error: error.message || "Internal server error during pairing." });
         }
     }
