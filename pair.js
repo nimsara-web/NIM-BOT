@@ -147,22 +147,27 @@ function setupCommandHandlers(socket, number) {
             if (shouldAutoReply) {
                 const textLower = body.toLowerCase().trim();
 
-                // 1. "Hi" දැමූ විට
-                if (textLower === 'Hi' || textLower === 'හායි') {
+                // 1. "Hi" හෝ "හායි" අඩංගු නම්
+                if (textLower.includes('Hi') || textLower.includes('හායි')) {
                     await socket.sendMessage(sender, { text: 'Hi! 👋' }, { quoted: msg });
                 }
-                // 2. "Mk" දැමූ විට
-                else if (textLower === 'mk' || textLower === 'මොකද කරන්නෙ' || textLower === 'Mokada karanne') {
-                    await socket.sendMessage(sender, { text: 'Mokuth Na Innawa 😊' }, { quoted: msg });
+                // 2. "Mk" හෝ "මොකද" අඩංගු නම්
+                else if (textLower.includes('Mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada')) {
+                    await socket.sendMessage(sender, { text: 'Mokuth Na innwa oya mokada karanne😊' }, { quoted: msg });
                 }
-                // 3. "Nimsara" (හෝ ඔයාගේ නම) දැමූ විට Text එකයි Audio එකයි යන්න
+                // 3. "Nimsara" හෝ "නිම්සර" අඩංගු නම්
                 else if (textLower.includes('Nimsara') || textLower.includes('නිම්සර')) {
-                    await socket.sendMessage(sender, { 
-                        text: 'Ow Kiyanna eya tikakin rp karai man eya hadapu bot 👨‍💻',
-                        audio: { url: 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3' }, // ඔයාගේ ඔඩියෝ ෆයිල් එක තියෙන path එක මෙතනට දෙන්න
-                        mimetype: 'audio/mp4',
-                        ptt: true // Voice note එකක් විදිහට යන්න (false දුන්නොත් සාමාන්‍ය audio file එකක් වගේ යයි)
-                    }, { quoted: msg });
+                    try {
+                        await socket.sendMessage(sender, { 
+                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
+                            audio: { url: 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3' },
+                            mimetype: 'audio/mp4',
+                            ptt: true 
+                        }, { quoted: msg });
+                    } catch (err) {
+                        // ඕඩියෝ ෆයිල් එක නැති වුණොත් error එකක් නොදී ටෙක්ස්ට් එක විතරක් යවන්න
+                        await socket.sendMessage(sender, { text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎' }, { quoted: msg });
+                    }
                 }
             }
         }
