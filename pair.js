@@ -243,7 +243,6 @@ function setupCommandHandlers(socket, number) {
                     await reply(`✅ Bot mode successfully changed to: *${botMode.toUpperCase()}* 🚀`);
                     break;
                 }
-
         
 
                 case 'ping': {
