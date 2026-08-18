@@ -220,10 +220,13 @@ function setupCommandHandlers(socket, number) {
 *╎📍ᴄᴍᴅ - .mode public/group/inbox/private*
 *╎🔖 ᴅᴇꜱᴄ- Bot Run Mode.*
 *╎*
+*╎📍ᴄᴍᴅ - .autoread all/cmd/off*
+*╎🔖 ᴅᴇꜱᴄ- Auto Read Massege All Massege/Command Massege/Off Read.*
+*╎*
 *╎📍ᴄᴍᴅ - .vv*
 *╎🔖 ᴅᴇꜱᴄ- Download View Once image or video.*
 *╎*
-*╎🏷️ᴄᴍᴅ - .owner*
+*╎📍ᴄᴍᴅ - .owner*
 *╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
 *╰───────────────────────*
 
