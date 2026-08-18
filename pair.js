@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu + Image + Voice Note)
+ * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu + Image + Voice Note Fixed)
  */
 
 const {
@@ -175,10 +175,10 @@ function setupCommandHandlers(socket, number) {
                         caption: captionText.trim()
                     }, { quoted: msg });
 
-                    // Send Voice Note
+                    // Send Voice Note (Audio Fixed with audio/mpeg)
                     await socket.sendMessage(sender, {
                         audio: { url: BOT_AUDIO_URL },
-                        mimetype: 'audio/mp4',
+                        mimetype: 'audio/mpeg',
                         ptt: true
                     }, { quoted: msg });
                     break;
@@ -206,10 +206,10 @@ function setupCommandHandlers(socket, number) {
                         caption: aliveText
                     }, { quoted: msg });
 
-                    // Send Voice Note
+                    // Send Voice Note (Audio Fixed with audio/mpeg)
                     await socket.sendMessage(sender, {
                         audio: { url: BOT_AUDIO_URL },
-                        mimetype: 'audio/mp4',
+                        mimetype: 'audio/mpeg',
                         ptt: true
                     }, { quoted: msg });
                     break;
@@ -401,10 +401,10 @@ async function StartBot(number, res = null) {
                         caption: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\nCreator: *Nimsara*`
                     });
 
-                    // Send Voice Note on Connect
+                    // Send Voice Note on Connect (Audio Fixed with audio/mpeg)
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
                         audio: { url: BOT_AUDIO_URL },
-                        mimetype: 'audio/mp4',
+                        mimetype: 'audio/mpeg',
                         ptt: true
                     });
                 } catch (err) {
