@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Full Features Enabled (Status Seen, React, Always Online, Status Saver / Media Downloader Added)
+ * Mode: Full Features Enabled (Status Seen, React, Always Online, Status Saver / Media Downloader & View Once .vv Added)
  */
 
 const {
@@ -27,6 +27,7 @@ const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb');
 const SESSION_BASE_PATH = path.join(__dirname, './sessions');
 const BOT_IMAGE_URL = 'https://res.cloudinary.com/dqlh378fb/image/upload/v1787035957/zanta_media_uploads/c9qlcgvmwlcuf7oyb8be.jpg';
 const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
+const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r';
 
 // Global tracking maps
 const socketCreationTime = new Map();
@@ -141,7 +142,7 @@ function setupCommandHandlers(socket, number) {
 > 🪀 Contact - 0784280074
  (${botName.toUpperCase()} 🧛🏻)         
 
-──────────────────────       
+──────────────────────        
 *BOT STATUS 👾*
 > Bot Name : ${botName}
 > Run Time : ${hours}h ${minutes}m ${seconds}s
@@ -174,13 +175,16 @@ function setupCommandHandlers(socket, number) {
 *╎🏷️ᴄᴍᴅ - .send*
 *╎🔖 ᴅᴇꜱᴄ- Download/Save quoted status or media.*
 *╎*
+*╎🏷️ᴄᴍᴅ - .vv*
+*╎🔖 ᴅᴇꜱᴄ- Download View Once image or video.*
+*╎*
 *╎🏷️ᴄᴍᴅ - .owner*
 *╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
 *╰───────────────────────*
 
 🔗 Web: https://pending/
-*🏮 FOLLOW MINE CHANNEL :- https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r*
-> _MADE BY NIMSARA_
+*🏮 FOLLOW MINE CHANNEL :- ${BOT_CHANNEL_LINK}*
+> _MADE BY ${botName}_
 `;
                     // Send Menu Image + Caption
                     await socket.sendMessage(sender, {
@@ -205,7 +209,7 @@ function setupCommandHandlers(socket, number) {
                     const start = Date.now();
                     const sentMsg = await socket.sendMessage(sender, { text: 'Pinging...' }, { quoted: msg });
                     const latency = Date.now() - start;
-                    await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*` }, { quoted: sentMsg });
+                    await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_` }, { quoted: sentMsg });
                     break;
                 }
                 case 'alive':
@@ -216,7 +220,7 @@ function setupCommandHandlers(socket, number) {
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
                     
-                    const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara`;
+                    const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
                     
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
@@ -241,18 +245,18 @@ function setupCommandHandlers(socket, number) {
                     const hours = Math.floor(uptime / 3600);
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
-                    await reply(`⏱️ *Bot Uptime:* ${hours} hours, ${minutes} minutes, ${seconds} seconds.`);
+                    await reply(`⏱️ *${botName} Uptime:* ${hours} hours, ${minutes} minutes, ${seconds} seconds.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY Nimsara_`);
                     break;
                 }
                 case 'owner': {
-                    await reply(`👑 *Bot Owner Information*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}`);
+                    await reply(`👑 *Bot Owner Information*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     break;
                 }
                 case 'send':
                 case 'save': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
                     if (!quoted || !quoted.quotedMessage) {
-                        return reply(`⚠️ Please reply to a status or media message with *${prefix}send*`);
+                        return reply(`⚠️ Please reply to a status or media message with *${prefix}send*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
 
                     const quotedMsg = {
@@ -280,7 +284,7 @@ function setupCommandHandlers(socket, number) {
                             );
 
                             const innerMsg = quotedMsg.message[messageType] || quotedMsg.message.ephemeralMessage?.message[messageType];
-                            const caption = innerMsg?.caption || '';
+                            const caption = `${innerMsg?.caption || ''}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
 
                             if (messageType === 'imageMessage') {
                                 await socket.sendMessage(sender, { image: buffer, caption: caption }, { quoted: msg });
@@ -293,19 +297,71 @@ function setupCommandHandlers(socket, number) {
                             }
                         } else if (messageType === 'conversation' || messageType === 'extendedTextMessage') {
                             const text = quoted.quotedMessage.conversation || quoted.quotedMessage.extendedTextMessage?.text;
-                            await reply(`📥 *Saved Status Text:*\n\n${text}`);
+                            await reply(`📥 *Saved Status Text:*\n\n${text}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`);
                         } else {
-                            await reply("⚠️ Unsupported media type for downloading!");
+                            await reply(`⚠️ Unsupported media type for downloading!\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                         }
                     } catch (err) {
                         console.error("Status download error:", err);
-                        await reply(`❌ Failed to download status/media: ${err.message}`);
+                        await reply(`❌ Failed to download status/media: ${err.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+                    break;
+                }
+                case 'vv':
+                case 'viewonce': {
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted || !quoted.quotedMessage) {
+                        return reply(`⚠️ Please reply to a View Once image or video with *${prefix}vv*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+
+                    let qMsg = quoted.quotedMessage;
+                    if (qMsg.ephemeralMessage) qMsg = qMsg.ephemeralMessage.message;
+                    if (qMsg.viewOnceMessage) qMsg = qMsg.viewOnceMessage.message;
+                    if (qMsg.viewOnceMessageV2) qMsg = qMsg.viewOnceMessageV2.message;
+                    if (qMsg.viewOnceMessageV2Extension) qMsg = qMsg.viewOnceMessageV2Extension.message;
+
+                    const messageType = Object.keys(qMsg)[0];
+
+                    if (['imageMessage', 'videoMessage'].includes(messageType)) {
+                        const downloadMsg = {
+                            key: {
+                                remoteJid: quoted.remoteJid || sender,
+                                id: quoted.stanzaId,
+                                participant: quoted.participant
+                            },
+                            message: {
+                                [messageType]: qMsg[messageType]
+                            }
+                        };
+
+                        try {
+                            const buffer = await downloadMediaMessage(
+                                downloadMsg,
+                                'buffer',
+                                {},
+                                { logger: pino({ level: 'silent' }) }
+                            );
+
+                            const innerMsg = qMsg[messageType];
+                            const caption = `📥 *Here is your View Once media! (${botName})*\n\n${innerMsg?.caption || ''}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY Nimsara_`;
+
+                            if (messageType === 'imageMessage') {
+                                await socket.sendMessage(sender, { image: buffer, caption: caption }, { quoted: msg });
+                            } else if (messageType === 'videoMessage') {
+                                await socket.sendMessage(sender, { video: buffer, caption: caption }, { quoted: msg });
+                            }
+                        } catch (err) {
+                            console.error("View once download error:", err);
+                            await reply(`❌ Failed to download View Once media: ${err.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        }
+                    } else {
+                        await reply(`⚠️ Please reply to a valid View Once image or video!\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     break;
                 }
                 case 'setprefix': {
                     const newPrefix = args[0];
-                    if (!newPrefix) return reply("⚠️ Usage: .setprefix [New Prefix]\nExample: .setprefix !");
+                    if (!newPrefix) return reply(`⚠️ Usage: .setprefix [New Prefix]\nExample: .setprefix !\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     await handleSettingUpdate("PREFIX", newPrefix, reply, number);
                     break;
                 }
@@ -330,6 +386,8 @@ function setupCommandHandlers(socket, number) {
 • ${pfx}autolike [on / off]
 • ${pfx}alwaysonline [on / off]
 • ${pfx}setprefix [New Prefix]
+
+🔗 Channel: ${BOT_CHANNEL_LINK}
 `;
                     await reply(settingsText.trim());
                     break;
@@ -337,7 +395,7 @@ function setupCommandHandlers(socket, number) {
                 case 'autoview': {
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply("⚠️ Usage: .autoview on  OR  .autoview off");
+                        return reply(`⚠️ Usage: .autoview on  OR  .autoview off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("AUTO_VIEW_STATUS", normalized, reply, number);
@@ -346,7 +404,7 @@ function setupCommandHandlers(socket, number) {
                 case 'autolike': {
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply("⚠️ Usage: .autolike on  OR  .autolike off");
+                        return reply(`⚠️ Usage: .autolike on  OR  .autolike off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("AUTO_LIKE_STATUS", normalized, reply, number);
@@ -355,7 +413,7 @@ function setupCommandHandlers(socket, number) {
                 case 'alwaysonline': {
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply("⚠️ Usage: .alwaysonline on  OR  .alwaysonline off");
+                        return reply(`⚠️ Usage: .alwaysonline on  OR  .alwaysonline off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("ALWAYS_ONLINE", normalized, reply, number);
@@ -466,7 +524,7 @@ async function StartBot(number, res = null) {
 
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
                         image: { url: BOT_IMAGE_URL },
-                        caption: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\nCreator: *Nimsara*`
+                        caption: `╔═════════════════════════╗\n║  🎉 *${botName} CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\nCreator: *Nimsara*`
                     });
 
                     await delay(1500);
