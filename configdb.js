@@ -11,7 +11,7 @@ const {
     delay,
     makeCacheableSignalKeyStore,
     DisconnectReason
-} = require('@whiskeysockets/baileys');
+} = require('baileys');
 
 const pino = require('pino');
 const fs = require('fs-extra');
