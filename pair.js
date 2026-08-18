@@ -14,6 +14,9 @@ const {
     downloadMediaMessage
 } = require('baileys');
 
+const yts = require('yt-search');
+const ytdl = require('@distube/ytdl-core');
+const axios = require('axios');
 const pino = require('pino');
 const fs = require('fs-extra');
 const path = require('path');
@@ -212,6 +215,129 @@ function setupCommandHandlers(socket, number) {
                     await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_` }, { quoted: sentMsg });
                     break;
                 }
+
+
+case 'song': {
+                    const query = args.join(' ');
+                    if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    
+                    await reply(`🔍 Searching for *${query}*... 🎶`);
+                    try {
+                        const search = await yts(query);
+                        const video = search.videos[0];
+                        if (!video) return reply(`❌ Song not found! Try another name.`);
+
+                        await reply(`🎵 Found: *${video.title}*\n⏱️ Duration: ${video.timestamp}\n📥 Downloading audio, please wait...`);
+
+                        const audioStream = ytdl(video.url, { filter: 'audioonly', quality: 'highestaudio' });
+                        
+                        const chunks = [];
+                        for await (const chunk of audioStream) {
+                            chunks.push(chunk);
+                        }
+                        const buffer = Buffer.concat(chunks);
+
+                        await socket.sendMessage(sender, {
+                            audio: buffer,
+                            mimetype: 'audio/mpeg',
+                            ptt: false,
+                            fileName: `${video.title}.mp3`,
+                            contextInfo: {
+                                externalAdReply: {
+                                    title: video.title,
+                                    body: `Duration: ${video.timestamp}`,
+                                    thumbnailUrl: video.thumbnail,
+                                    sourceUrl: video.url,
+                                    mediaType: 2
+                                }
+                            }
+                        }, { quoted: msg });
+
+                    } catch (e) {
+                        console.error("Song download error:", e);
+                        await reply(`❌ Failed to download song: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+                    break;
+                }
+
+                case 'tt':
+                case 'tiktok': {
+                    const url = args[0];
+                    if (!url || !url.includes('tiktok.com')) {
+                        return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+
+                    await reply(`📥 Downloading TikTok video in HD quality... Please wait ⏳`);
+                    try {
+                        const response = await axios.get(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`);
+                        const data = response.data;
+
+                        if (data && data.code === 0 && data.data) {
+                            const videoUrl = data.data.hdplay || data.data.play;
+                            const title = data.data.title || 'TikTok Video';
+                            const author = data.data.author?.nickname || 'Unknown';
+
+                            const caption = `🎬 *TikTok Video Downloaded*\n\n📝 Title: ${title}\n👤 Author: ${author}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
+
+                            await socket.sendMessage(sender, {
+                                video: { url: videoUrl },
+                                caption: caption
+                            }, { quoted: msg });
+                        } else {
+                            await reply(`❌ Failed to fetch TikTok video. Invalid link or API error.`);
+                        }
+                    } catch (e) {
+                        console.error("TikTok download error:", e);
+                        await reply(`❌ Error downloading TikTok video: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+                    break;
+                }
+
+                case 'yt':
+                case 'youtube': {
+                    const url = args[0];
+                    const type = args[1] ? args[1].toLowerCase() : 'video';
+
+                    if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
+                        return reply(`⚠️ Usage: .yt [YouTube Link] [video/audio]\nExample: .yt https://youtu.be/xxxx video\nExample: .yt https://youtu.be/xxxx audio\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+
+                    try {
+                        const info = await ytdl.getInfo(url);
+                        const title = info.videoDetails.title;
+
+                        if (type === 'audio') {
+                            await reply(`📥 Downloading YouTube Audio for *${title}*... 🎧`);
+                            const audioStream = ytdl(url, { filter: 'audioonly', quality: 'highestaudio' });
+                            const chunks = [];
+                            for await (const chunk of audioStream) {
+                                chunks.push(chunk);
+                            }
+                            const buffer = Buffer.concat(chunks);
+
+                            await socket.sendMessage(sender, {
+                                audio: buffer,
+                                mimetype: 'audio/mpeg',
+                                ptt: false,
+                                fileName: `${title}.mp3`
+                            }, { quoted: msg });
+
+                        } else {
+                            await reply(`📥 Downloading YouTube Video for *${title}*... 🎬`);
+                            await socket.sendMessage(sender, {
+                                video: { url: url },
+                                caption: `🎬 *YouTube Video*\n\n📝 Title: ${title}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`
+                            }, { quoted: msg });
+                        }
+                    } catch (e) {
+                        console.error("YouTube download error:", e);
+                        await reply(`❌ Failed to download YouTube media: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
+                    break;
+                }
+
+
+                    
                 case 'alive':
                 case 'status': {
                     const startTime = socketCreationTime.get(number) || Date.now();
