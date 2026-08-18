@@ -296,14 +296,9 @@ function setupCommandHandlers(socket, number) {
 
 
 
-                    case 'autoread': {
-                    const cleanSender = sender.split('@')[0].split(':')[0];
-                    const cleanBotNumber = socket.user?.id ? socket.user.id.split('@')[0].split(':')[0] : '';
-                    const myPersonalNumber = ""; // ඔයාගේ Personal number එක දාන්න ඕන නම් මෙතන දාන්න (උදා: "94*****")
-                    
-                    const isOwner = (cleanSender === cleanBotNumber) || (myPersonalNumber && cleanSender === myPersonalNumber);
-
-                    if (!isOwner) {
+                 case 'autoread': {
+                    // Bot Connect කරපු නම්බර් එකෙන් (fromMe) විතරක් වැඩ කරනවා
+                    if (!msg.key.fromMe) {
                         return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
                     }
 
