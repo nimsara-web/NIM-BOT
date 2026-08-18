@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Normal Text Message Mode (Button Messages Removed)
+ * Mode: Normal Text Message Mode with Robust Reconnection Handling
  */
 
 const {
@@ -10,7 +10,7 @@ const {
     Browsers,
     delay,
     makeCacheableSignalKeyStore,
-    downloadContentFromMessage
+    DisconnectReason
 } = require('@whiskeysockets/baileys');
 
 const pino = require('pino');
@@ -19,9 +19,6 @@ const path = require('path');
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
-const axios = require('axios');
-const crypto = require('crypto');
-const FormData = require('form-data');
 
 const Session = require('./Id'); 
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb'); 
@@ -35,6 +32,7 @@ async function useMongoDBAuthState(number) {
 
     let dbData = await Session.findOne({ number: sanitizedNumber });
     const credsPath = path.join(sessionDir, 'creds.json');
+    
     if (dbData && dbData.creds) {
         await fs.writeJson(credsPath, dbData.creds, { spaces: 2 });
     }
@@ -46,12 +44,16 @@ async function useMongoDBAuthState(number) {
         saveCreds: async () => {
             await saveCreds();
             if (await fs.pathExists(credsPath)) {
-                const credsData = await fs.readJson(credsPath);
-                await Session.findOneAndUpdate(
-                    { number: sanitizedNumber },
-                    { creds: credsData, updatedAt: new Date() },
-                    { upsert: true, new: true }
-                );
+                try {
+                    const credsData = await fs.readJson(credsPath);
+                    await Session.findOneAndUpdate(
+                        { number: sanitizedNumber },
+                        { creds: credsData, updatedAt: new Date() },
+                        { upsert: true, new: true }
+                    );
+                } catch (e) {
+                    console.error("Error saving creds to MongoDB:", e);
+                }
             }
         }
     };
@@ -82,7 +84,7 @@ function setupCommandHandlers(socket, number) {
             switch (command) {
                 case 'menu':
                 case 'help': {
-                    let menuText = `╔═════════════════════════╗\n║     🤖 *${botName}* 🤖     \n╚═════════════════════════╝\nCreator: *Nimsara*\n\n*Commands:*\n• ${prefix}ping\n• ${prefix}settings\n• ${prefix}setname [name]\n• ${prefix}setlogo [url/reply]`;
+                    let menuText = `╔═════════════════════════╗\n║     🤖 *${botName}* 🤖     \n╚═════════════════════════╝\nCreator: *Nimsara*\n\n*Commands:*\n• ${prefix}ping\n• ${prefix}settings\n• ${prefix}setname [name]`;
                     await reply(menuText);
                     break;
                 }
@@ -142,7 +144,7 @@ function setupStatusHandlers(socket, number) {
     });
 }
 
-async function StartBot(number, res) {
+async function StartBot(number, res = null) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
     const { state, saveCreds } = await useMongoDBAuthState(sanitizedNumber);
     const logger = pino({ level: 'silent' });
@@ -161,13 +163,22 @@ async function StartBot(number, res) {
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
+        
         if (connection === 'open') {
             console.log(`✅ Bot successfully connected for number: ${sanitizedNumber}`);
             await ensureConfig(sanitizedNumber);
         } else if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            if (statusCode !== 401) {
-                setTimeout(() => StartBot(sanitizedNumber, { send: () => {} }), 5000);
+            console.log(`⚠️ Connection closed for ${sanitizedNumber}, status code: ${statusCode}`);
+
+            // If logged out or session invalidated, clear session data
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                console.log(`❌ Session logged out for ${sanitizedNumber}. Removing from DB.`);
+                await Session.deleteOne({ number: sanitizedNumber });
+                await fs.remove(path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`));
+            } else {
+                // Reconnect automatically for other closures (like 515 restart required, connection reset, etc.)
+                setTimeout(() => StartBot(sanitizedNumber), 3000);
             }
         }
     });
@@ -175,20 +186,22 @@ async function StartBot(number, res) {
     setupCommandHandlers(sock, sanitizedNumber);
     setupStatusHandlers(sock, sanitizedNumber);
 
+    // Request Pairing Code if not registered
     if (!sock.authState.creds.registered) {
-        await delay(1500);
+        await delay(3000); // 3 seconds delay to stabilize socket before requesting code
         try {
             let code = await sock.requestPairingCode(sanitizedNumber);
-            if (!res.headersSent) {
+            if (res && !res.headersSent) {
                 res.send({ code });
             }
         } catch (e) {
-            if (!res.headersSent) {
-                res.status(500).send({ error: "Failed to generate pairing code." });
+            console.error("Pairing code generation error:", e);
+            if (res && !res.headersSent) {
+                res.status(500).send({ error: "Failed to generate pairing code. Please try again." });
             }
         }
     } else {
-        if (!res.headersSent) {
+        if (res && !res.headersSent) {
             res.send({ status: "Already connected" });
         }
     }
