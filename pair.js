@@ -158,7 +158,7 @@ function setupCommandHandlers(socket, number) {
                     forwardedNewsletterMessageInfo: {
                         newsletterJid: '120363362308230584@newsletter',
                         newsletterName: 'NIM BOT Channel', // (ඔයාට කැමති නම් වෙනස් කරගන්න පුළුවන්)
-                        serverMessageId: 1
+                        serverMessageId: 100
                     }
                 }
             }, { quoted: msg });
