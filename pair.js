@@ -421,7 +421,7 @@ async function StartBot(number, res = null) {
                 return res.send({ status: "Already connected" });
             }
         }
-    } else (error) => {
+    } catch (error) {
         console.error("❌ StartBot fatal error:", error.message);
         if (res && typeof res.status === 'function' && !res.headersSent) {
             return res.status(500).send({ error: error.message || "Internal server error during pairing." });
