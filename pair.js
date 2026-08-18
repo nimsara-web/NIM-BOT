@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Fixed JSON & Safe Res Handling
+ * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu)
  */
 
 const {
@@ -24,6 +24,10 @@ const Session = require('./Id');
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb'); 
 
 const SESSION_BASE_PATH = path.join(__dirname, './sessions');
+
+// Global tracking maps
+const socketCreationTime = new Map();
+const activeSockets = new Map();
 
 async function useMongoDBAuthState(number) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
@@ -49,7 +53,6 @@ async function useMongoDBAuthState(number) {
             await saveCreds();
             if (await fs.pathExists(credsPath)) {
                 try {
-                    // Read file safely and check if valid JSON before saving to MongoDB
                     const rawData = await fs.readFile(credsPath, 'utf8');
                     if (rawData && rawData.trim() !== '') {
                         const credsData = JSON.parse(rawData);
@@ -67,15 +70,28 @@ async function useMongoDBAuthState(number) {
     };
 }
 
+// Robust message body extractor for Baileys
+function getMessageBody(msg) {
+    if (!msg.message) return '';
+    let message = msg.message;
+    if (message.ephemeralMessage) message = message.ephemeralMessage.message;
+    if (message.viewOnceMessage) message = message.viewOnceMessage.message;
+    if (message.viewOnceMessageV2) message = message.viewOnceMessageV2.message;
+    
+    return message.conversation || 
+           message.extendedTextMessage?.text || 
+           message.imageMessage?.caption || 
+           message.videoMessage?.caption || '';
+}
+
 function setupCommandHandlers(socket, number) {
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        if (!msg.message) return;
 
         const sender = msg.key.remoteJid;
-        const body = msg.message.conversation || 
-                     msg.message.extendedTextMessage?.text || 
-                     msg.message.imageMessage?.caption || '';
+        const body = getMessageBody(msg);
+        if (!body) return;
 
         const prefix = await get('PREFIX', number) || '.';
         if (!body.startsWith(prefix)) return;
@@ -90,10 +106,259 @@ function setupCommandHandlers(socket, number) {
 
         try {
             switch (command) {
+                case 'allmenu':
                 case 'menu':
                 case 'help': {
-                    let menuText = `╔═════════════════════════╗\n║     🤖 *${botName}* 🤖     \n╚═════════════════════════╝\nCreator: *Nimsara*\n\n*Commands:*\n• ${prefix}ping\n• ${prefix}settings\n• ${prefix}setname [name]`;
-                    await reply(menuText);
+                    const startTime = socketCreationTime.get(number) || Date.now();
+                    const uptime = Math.floor((Date.now() - startTime) / 1000);
+                    const hours = Math.floor(uptime / 3600);
+                    const minutes = Math.floor((uptime % 3600) / 60);
+                    const seconds = Math.floor(uptime % 60);
+                    const channelStatus = '✅ Followed';
+                    
+                    const botFooter = await get('BOT_FOOTER', number) || 'NIMSARA';
+                    
+                    const captionText = `
+👋˖𖹭⸼ ${botName.toUpperCase()} 𝗑 𝗆𝗂𝗇𝗂 🎀⊹
+─𝗍𝗁𝖾 𝗎𝗅𝗍𝗂𝗆𝖺𝗍𝖾 𝗐𝗁𝖺𝗍𝗌𝖺𝗉𝗉 𝖻𝗈𝗍 𝖾𝗑𝗉𝖾𝗋𝗂𝖾𝗇𝖈𝖾˚⟡˖ ࣪
+
+⣀⠤⢤
+⢠⠒⠒⠲⡔⢺⠁    ⠘⡄ ⸼ 𝖻.𝗈𝗍!          
+⠈⣇⣀⡠⢳⠚⢿⣒⢫⡵ — (${botName.toUpperCase()} 𝗑)         
+⢠⡾⢥⡰⠃        ⠈⠑⠃   𝗆𝗂𝗇𝗂 𝖻𝗈𝗍 🖤   
+      ⠘⠁⋆. 𐙚 ˚𝗉𝗈𝗐𝖾𝗋 • 𝗌𝗉𝖾𝖾𝖽 • 𝖿𝗎𝗇
+      
+╭╮꒰ 𝗯𝗼𝘁 𝘀𝘁𝗮𝘁𝘂𝘀 ꒱ ─┈
+┃֪ ⚘ ִ ׄ𝅄 𝗇𝖺𝗆𝖾 : ${botName}
+┃֪ ⚘ ִ ׄ𝅄 𝗎𝗉𝗍𝗂𝗆𝖾 : ${hours}h ${minutes}m ${seconds}s
+┃֪ ⚘ ִ ׄ𝅄 𝗁𝗈𝗌𝗍 : RENDER
+┃֪ ⚘ ִ ׄ𝅄 𝖺𝖼𝗍𝗂𝗏𝖾 𝗌𝖾𝗌𝗌𝗂𝗈𝗇 : ${activeSockets.size}
+┃֪ ⚘ ִ ׄ𝅄 𝖼𝗁𝖺𝗇𝗇𝖾𝗅 : ${channelStatus}
+┃֪ ⚘ ִ ׄ𝅄 𝖼𝗋𝖾𝖽𝗂𝗍 𝖻𝗒 : NIMSARA
+╰╮─────────── 🍃
+
+*╭─\`💠 𝗕𝗢𝗧  𝗨𝗡𝗧𝗜𝗟𝗜𝗧𝗬...⚙️\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .alive*
+*╎🔖 ᴅᴇꜱᴄ- Show bot status.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .status*
+*╎🔖 ᴅᴇꜱᴄ- Check bot status.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .ping*
+*╎🔖 ᴅᴇꜱᴄ- Check response time.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .runtime*
+*╎🔖 ᴅᴇꜱᴄ- Show bot uptime.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .system*
+*╎🔖 ᴅᴇꜱᴄ- System information.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .jid*
+*╎🔖 ᴅᴇꜱᴄ- Get JID info.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .deleteme*
+*╎🔖 ᴅᴇꜱᴄ- Delete your session.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .owner*
+*╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .repo*
+*╎🔖 ᴅᴇꜱᴄ- View bot repository.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .save*
+*╎🔖 ᴅᴇꜱᴄ- Status download command.*
+*╰───────────────────────*
+
+*╭─\`💠 𝗔𝗜  𝗧𝗢𝗢𝗟...🧠\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .ai*
+*╎🔖 ᴅᴇꜱᴄ- Start AI chat.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .openai*
+*╎🔖 ᴅᴇꜱᴄ- Use OpenAI tools.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .soloai*
+*╎🔖 ᴅᴇꜱᴄ- Solo-leveling AI helper.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .neno*
+*╎🔖 ᴅᴇꜱᴄ- Solo-leveling neno photo makd helper.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .aiimg*
+*╎🔖 ᴅᴇꜱᴄ- Generate AI image.*
+*╰─────────────────────*
+
+*╭─\`💠 𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗𝗦 𝗖𝗢𝗠𝗠𝗔𝗡𝗗...📥\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .song*
+*╎🔖 ᴅᴇꜱᴄ- Download songs.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .csong*
+*╎🔖 ᴅᴇꜱᴄ- Channel song sender.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .tiktok*
+*╎🔖 ᴅᴇꜱᴄ- Download TikTok video.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .ctt*
+*╎🔖 ᴅᴇꜱᴄ- Channel TikTok video sender.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .fb*
+*╎🔖 ᴅᴇꜱᴄ- Download Facebook video.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .ig*
+*╎🔖 ᴅᴇꜱᴄ- Download Instagram video.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .video*
+*╎🔖 ᴅᴇꜱᴄ- Other video tools.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .xvideo*
+*╎🔖 ᴅᴇꜱᴄ- 18+ Download command.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .spotify*
+*╎🔖 ᴅᴇꜱᴄ- Download from Spotify.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .wallpaper*
+*╎🔖 ᴅᴇꜱᴄ- Download wallpapers.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .ringtone*
+*╎🔖 ᴅᴇꜱᴄ- Download ringtones.*
+*╰────────────────────────*
+
+*╭─\`💠 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 & 𝗥𝗘𝗔𝗖𝗧...📡\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .chennel*
+*╎🔖 ᴅᴇꜱᴄ- Check channel follow.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .chr*
+*╎🔖 ᴅᴇꜱᴄ- Channel reaction.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .active*
+*╎🔖 ᴅᴇꜱᴄ- Bot active numbers.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .chennelinfo*
+*╎🔖 ᴅᴇꜱᴄ- Get channel information.*
+*╰─────────────────────*
+
+*╭─\`💠 𝗡𝗘𝗪𝗦 & 𝗜𝗡𝗙𝗢....🌐\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .nasa*
+*╎🔖 ᴅᴇꜱᴄ- Latest NASA news.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .gossip*
+*╎🔖 ᴅᴇꜱᴄ- Gossip news.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .cricket*
+*╎🔖 ᴅᴇꜱᴄ- Cricket updates.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .silumina*
+*╎🔖 ᴅᴇꜱᴄ- Silumina features.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .weather*
+*╎🔖 ᴅᴇꜱᴄ- Current weather info.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .cinfo*
+*╎🔖 ᴅᴇꜱᴄ- Get country information.*
+*╰────────────────────*
+
+*╭─\`💠 𝗣𝗥𝗢𝗙𝗜𝗟𝗘 & 𝗡𝗗𝗘𝗦𝗜𝗡𝗚...🖼️\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .winfo*
+*╎🔖 ᴅᴇꜱᴄ- Get user profile info.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .getdp*
+*╎🔖 ᴅᴇꜱᴄ- Get profile picture.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .logo*
+*╎🔖 ᴅᴇꜱᴄ- Create logo image.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .fancy*
+*╎🔖 ᴅᴇꜱᴄ- View fancy text.*
+*╰────────────────────*
+
+*╭─\`💠 𝗙𝗨𝗡 & 𝗠𝗢𝗧𝗜𝗢𝗡𝗦...😄\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .moon*
+*╎🔖 ᴅᴇꜱᴄ- Moon emotion.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .shy*
+*╎🔖 ᴅᴇꜱᴄ- Shy emotion.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .sad*
+*╎🔖 ᴅᴇꜱᴄ- Sad emotion.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .angry*
+*╎🔖 ᴅᴇꜱᴄ- Angry emotion.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .heart*
+*╎🔖 ᴅᴇꜱᴄ- Heart emotion.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .happy*
+*╎🔖 ᴅᴇꜱᴄ- Happy emotion.*
+*╰────────────────────*
+
+*╭─\`💠 𝗔𝗡𝗜𝗠𝗘 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦...🎌\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .waifu*
+*╎🔖 ᴅᴇꜱᴄ- Get waifu image.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .neko*
+*╎🔖 ᴅᴇꜱᴄ- Get neko image.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .imgmegumin*
+*╎🔖 ᴅᴇꜱᴄ- Get Megumin image.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .maid*
+*╎🔖 ᴅᴇꜱᴄ- Get maid image.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .garl*
+*╎🔖 ᴅᴇꜱᴄ- Get garl image.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .awoo*
+*╎🔖 ᴅᴇꜱᴄ- Get awoo image.*
+*╰────────────────────*
+
+*╭─\`💠 𝗦𝗧𝗔𝗟𝗞 & 𝗜𝗡𝗙𝗢....🔎\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .xstalk*
+*╎🔖 ᴅᴇꜱᴄ- Stalk social media.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .npm*
+*╎🔖 ᴅᴇꜱᴄ- NPM package search.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .gitclone*
+*╎🔖 ᴅᴇꜱᴄ- Clone git repository.*
+*╰────────────────────*
+
+*╭─\`💠 𝗧𝗢𝗧𝗛𝗘𝗥 𝗙𝗘𝗔𝗧𝗨𝗥𝗘𝗦....💬\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .bomb*
+*╎🔖 ᴅᴇꜱᴄ- Send bomb message.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .pair*
+*╎🔖 ᴅᴇꜱᴄ- Generate pair code.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .bc*
+*╎🔖 ᴅᴇꜱᴄ- Broadcast message.*
+*╎*
+*╎🏷️ᴄᴍᴅ - .vv*
+*╎🔖 ᴅᴇꜱᴄ- view photo ( only 1 photo view )*
+*╎*
+*╎🏷️ᴄᴍᴅ - .get*
+*╎🔖 ᴅᴇꜱᴄ- Group member message all.*
+*╎*
+*╰──────────────────────*
+
+*╭─\`💠 𝗢𝗪𝗡𝗘𝗥 𝗣𝗘𝗥𝗦𝗢𝗡𝗔𝗟 𝗜𝗭𝗘𝗗.....🔖\`┈⊷*
+*╎*
+*╎🏷️ᴄᴍᴅ - .credit*
+*╎🔖 ᴅᴇꜱᴄ- credit features.*
+*╰─────────────────*
+
+🔗 Web: https://pending/
+*🏮 FOLLOW MINE CHENNEL :- https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r*
+> _MEDA BY NIMSARA_
+`;
+                    await reply(captionText);
                     break;
                 }
                 case 'ping': {
@@ -101,13 +366,6 @@ function setupCommandHandlers(socket, number) {
                     const sentMsg = await socket.sendMessage(sender, { text: 'Pinging...' }, { quoted: msg });
                     const latency = Date.now() - start;
                     await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*` }, { quoted: sentMsg });
-                    break;
-                }
-                case 'settings': {
-                    const autoView = await get('AUTO_VIEW_STATUS', number) || 'true';
-                    const autoLike = await get('AUTO_LIKE_STATUS', number) || 'true';
-                    let settingsText = `⚙️ *NIM BOT SETTINGS* ⚙️\n\n• Auto View Status: *${autoView}*\n• Auto Like Status: *${autoLike}*`;
-                    await reply(settingsText);
                     break;
                 }
                 case 'setname': {
@@ -125,28 +383,52 @@ function setupCommandHandlers(socket, number) {
     });
 }
 
-function setupStatusHandlers(socket, number) {
+// Auto Status Seen, Auto Status React & Always Online Handlers
+function setupStatusAndPresenceHandlers(socket, number) {
+    // Always Online Presence Handler
+    socket.ev.on('connection.update', async (update) => {
+        if (update.connection === 'open') {
+            try {
+                await socket.sendPresenceUpdate('available');
+            } catch (e) {}
+        }
+    });
+
+    // Periodic Presence Update to keep Always Online active
+    setInterval(async () => {
+        try {
+            await socket.sendPresenceUpdate('available');
+        } catch (e) {}
+    }, 60000);
+
+    // Auto Status Seen & React Handler
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
 
         if (msg.key && msg.key.remoteJid === 'status@broadcast') {
-            const autoView = await get('AUTO_VIEW_STATUS', number) || 'true';
+            // Auto View Status
+            const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
             if (autoView === 'true' || autoView === 'on') {
                 try {
                     await socket.readMessages([msg.key]);
-                } catch (e) {}
+                } catch (e) {
+                    console.error("Auto status view error:", e);
+                }
             }
 
-            const autoLike = await get('AUTO_LIKE_STATUS', number) || 'true';
+            // Auto Like / React Status
+            const autoLike = await get('AUTO_LIKE_STATUS', number) ?? 'true';
             if (autoLike === 'true' || autoLike === 'on') {
                 try {
-                    const emojis = ['❤️', '🔥', '👍', '✨', '🙌'];
+                    const emojis = ['❤️', '🔥', '👍', '✨', '🙌', '🌟'];
                     const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
                     await socket.sendMessage('status@broadcast', {
                         react: { text: randomEmoji, key: msg.key }
                     }, { statusJidList: [msg.key.participant] });
-                } catch (e) {}
+                } catch (e) {
+                    console.error("Auto status react error:", e);
+                }
             }
         }
     });
@@ -177,9 +459,25 @@ async function StartBot(number, res = null) {
             if (connection === 'open') {
                 console.log(`✅ Bot successfully connected for number: ${sanitizedNumber}`);
                 await ensureConfig(sanitizedNumber);
+                
+                socketCreationTime.set(sanitizedNumber, Date.now());
+                activeSockets.set(sanitizedNumber, sock);
+
+                // Send Connected Welcome Message to the bot owner's chat
+                try {
+                    await delay(2000);
+                    const botName = await get('BOT_NAME', sanitizedNumber) || 'NIM BOT';
+                    await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
+                        text: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *.* \n• Type *.allmenu* to view commands.\n\nCreator: *Nimsara*`
+                    });
+                } catch (err) {
+                    console.log("Failed to send connect message:", err.message);
+                }
+
             } else if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 console.log(`⚠️ Connection closed for ${sanitizedNumber}, status code: ${statusCode}`);
+                activeSockets.delete(sanitizedNumber);
 
                 if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                     await Session.deleteOne({ number: sanitizedNumber });
@@ -191,7 +489,7 @@ async function StartBot(number, res = null) {
         });
 
         setupCommandHandlers(sock, sanitizedNumber);
-        setupStatusHandlers(sock, sanitizedNumber);
+        setupStatusAndPresenceHandlers(sock, sanitizedNumber);
 
         if (!sock.authState.creds.registered) {
             await delay(3000);
