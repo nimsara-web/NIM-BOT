@@ -1,7 +1,7 @@
 /**
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
- * Mode: Full Features Enabled (Status Seen, React, Always Online, Menu + Image + Voice Note Fixed)
+ * Mode: Full Features Enabled (Status Seen, React, Always Online, Audio Buffer Playback Fixed)
  */
 
 const {
@@ -31,6 +31,19 @@ const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main
 const socketCreationTime = new Map();
 const activeSockets = new Map();
 
+// Helper to download audio as a Buffer to ensure 100% playback success
+async function getAudioBuffer(url) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+    } catch (e) {
+        console.error("Error downloading audio buffer:", e.message);
+        return null;
+    }
+}
+
 async function useMongoDBAuthState(number) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
     const sessionDir = path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`);
@@ -52,7 +65,6 @@ async function useMongoDBAuthState(number) {
     return {
         state,
         saveCreds: async () => {
-            // Ensure directory exists before saving to prevent ENOENT error
             await fs.ensureDir(sessionDir);
             await saveCreds();
             if (await fs.pathExists(credsPath)) {
@@ -175,15 +187,17 @@ function setupCommandHandlers(socket, number) {
                         caption: captionText.trim()
                     }, { quoted: msg });
 
-                    // Delay to ensure image is processed properly before sending voice note
                     await delay(1500);
 
-                    // Send Voice Note (Audio Fixed with audio/mpeg)
-                    await socket.sendMessage(sender, {
-                        audio: { url: BOT_AUDIO_URL },
-                        mimetype: 'audio/mpeg',
-                        ptt: true
-                    }, { quoted: msg });
+                    // Download and send Audio Buffer reliably
+                    const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
+                    if (audioBuffer) {
+                        await socket.sendMessage(sender, {
+                            audio: audioBuffer,
+                            mimetype: 'audio/mpeg',
+                            ptt: false
+                        }, { quoted: msg });
+                    }
                     break;
                 }
                 case 'ping': {
@@ -203,21 +217,21 @@ function setupCommandHandlers(socket, number) {
                     
                     const aliveText = `👋 *${botName}* is online and running!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara`;
                     
-                    // Send Alive Image + Caption
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
                         caption: aliveText
                     }, { quoted: msg });
 
-                    // Delay before sending voice note
                     await delay(1500);
 
-                    // Send Voice Note (Audio Fixed with audio/mpeg)
-                    await socket.sendMessage(sender, {
-                        audio: { url: BOT_AUDIO_URL },
-                        mimetype: 'audio/mpeg',
-                        ptt: true
-                    }, { quoted: msg });
+                    const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
+                    if (audioBuffer) {
+                        await socket.sendMessage(sender, {
+                            audio: audioBuffer,
+                            mimetype: 'audio/mpeg',
+                            ptt: false
+                        }, { quoted: msg });
+                    }
                     break;
                 }
                 case 'runtime': {
@@ -391,7 +405,7 @@ async function StartBot(number, res = null) {
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
 
-                // Send Connected Welcome Message + Image & Voice Note to owner's chat
+                // Send Connected Welcome Message + Image & Audio Buffer
                 try {
                     await delay(2000);
                     let botName = 'NIM BOT';
@@ -401,21 +415,21 @@ async function StartBot(number, res = null) {
                         currentPrefix = await get('PREFIX', sanitizedNumber) || '.';
                     } catch (e) {}
 
-                    // Send Connected Image Message
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
                         image: { url: BOT_IMAGE_URL },
                         caption: `╔═════════════════════════╗\n║  🎉 *NIM BOT CONNECTED* 🎉  \n╚═════════════════════════╝\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\nCreator: *Nimsara*`
                     });
 
-                    // Delay before sending voice note on connect
                     await delay(1500);
 
-                    // Send Voice Note on Connect (Audio Fixed with audio/mpeg)
-                    await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
-                        audio: { url: BOT_AUDIO_URL },
-                        mimetype: 'audio/mpeg',
-                        ptt: true
-                    });
+                    const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
+                    if (audioBuffer) {
+                        await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
+                            audio: audioBuffer,
+                            mimetype: 'audio/mpeg',
+                            ptt: false
+                        });
+                    }
                 } catch (err) {
                     console.log("Failed to send connect message:", err.message);
                 }
