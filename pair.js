@@ -441,127 +441,125 @@ function setupCommandHandlers(socket, number) {
 
                     
 
-    case 'song': {
-                const query = args.join(' ');
-                if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                
-                await reply(`🔍 Searching for *${query}*... 🎶`);
-                try {
-                    const search = await yts(query);
-                    const video = search.videos[0];
-                    if (!video) return reply(`❌ Song not found! Try another name.`);
+    // CASE: SONG
+case 'song': {
+    const query = args.join(' ');
+    if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+    
+    await reply(`🔍 Searching for *${query}*... 🎶`);
+    try {
+        const search = await yts(query);
+        const video = search.videos[0];
+        if (!video) return reply(`❌ Song not found! Try another name.`);
 
-                    await reply(`🎵 Found: *${video.title}*\n⏱️ Duration: ${video.timestamp}\n📥 Downloading audio, please wait...`);
+        await reply(`🎵 Found: *${video.title}*\n📥 Downloading audio, please wait...`);
 
-                    // වෙනස් කළ API එක: Delirius API
-                    const apiRes = await axios.get(`https://delirius-api-oficial.vercel.app/download/ytmp3?url=${encodeURIComponent(video.url)}`);
-                    if (!apiRes.data || !apiRes.data.status || !apiRes.data.data.download) {
-                        return reply(`❌ Download failed from API. Try again later.`);
-                    }
+        // Vreden API for ytmp3
+        const apiRes = await axios.get(`https://api.vreden.web.id/api/ytmp3?url=${encodeURIComponent(video.url)}`);
+        
+        if (!apiRes.data || !apiRes.data.status || !apiRes.data.result) {
+            return reply(`❌ Download failed from API. Try again later.`);
+        }
 
-                    const audioUrl = apiRes.data.data.download;
+        const audioUrl = apiRes.data.result.download.url || apiRes.data.result.url;
 
-                    await socket.sendMessage(sender, {
-                        audio: { url: audioUrl },
-                        mimetype: 'audio/mpeg',
-                        ptt: false,
-                        fileName: `${video.title}.mp3`,
-                        contextInfo: {
-                            externalAdReply: {
-                                title: video.title,
-                                body: `Duration: ${video.timestamp}`,
-                                thumbnailUrl: video.thumbnail,
-                                sourceUrl: video.url,
-                                mediaType: 2
-                            }
-                        }
-                    }, { quoted: msg });
-
-                } catch (e) {
-                    console.error("Song download error:", e);
-                    await reply(`❌ Failed to download song: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+        await socket.sendMessage(sender, {
+            audio: { url: audioUrl },
+            mimetype: 'audio/mpeg',
+            ptt: false,
+            fileName: `${video.title}.mp3`,
+            contextInfo: {
+                externalAdReply: {
+                    title: video.title,
+                    body: `Duration: ${video.timestamp}`,
+                    thumbnailUrl: video.thumbnail,
+                    sourceUrl: video.url,
+                    mediaType: 1
                 }
-                break;
             }
+        }, { quoted: msg });
 
-            case 'tt':
-            case 'tiktok': {
-                const url = args[0];
-                if (!url || !url.includes('tiktok.com')) {
-                    return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                }
+    } catch (e) {
+        console.error("Song download error:", e);
+        await reply(`❌ Failed to download song: ${e.message}`);
+    }
+    break;
+}
 
-                await reply(`📥 Downloading TikTok video... Please wait ⏳`);
-                try {
-                    // වෙනස් කළ API එක: Delirius API
-                    const response = await axios.get(`https://delirius-api-oficial.vercel.app/download/tiktok?url=${encodeURIComponent(url)}`);
-                    const resData = response.data;
+// CASE: TIKTOK
+case 'tt':
+case 'tiktok': {
+    const url = args[0];
+    if (!url || !url.includes('tiktok.com')) {
+        return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+    }
 
-                    if (resData && resData.status && resData.data) {
-                        const videoUrl = resData.data.meta.video.no_watermark || resData.data.link;
-                        const title = resData.data.title || 'TikTok Video';
-                        const author = resData.data.author.nickname || 'Unknown';
+    await reply(`📥 Downloading TikTok video... Please wait ⏳`);
+    try {
+        // Vreden API for tiktok
+        const response = await axios.get(`https://api.vreden.web.id/api/tiktok?url=${encodeURIComponent(url)}`);
+        const resData = response.data;
 
-                        const caption = `🎬 *TikTok Video Downloaded*\n\n📝 Title: ${title}\n👤 Author: ${author}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
+        if (resData && resData.status && resData.result) {
+            const videoUrl = resData.result.data.no_watermark || resData.result.data.nowm || resData.result.data.video;
+            const caption = `🎬 *TikTok Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
 
-                        await socket.sendMessage(sender, {
-                            video: { url: videoUrl },
-                            caption: caption
-                        }, { quoted: msg });
-                    } else {
-                        await reply(`❌ Failed to fetch TikTok video. Invalid link or API error.`);
-                    }
-                } catch (e) {
-                    console.error("TikTok download error:", e);
-                    await reply(`❌ Error downloading TikTok video: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                }
-                break;
-            }
+            await socket.sendMessage(sender, {
+                video: { url: videoUrl },
+                caption: caption
+            }, { quoted: msg });
+        } else {
+            await reply(`❌ Failed to fetch TikTok video. Invalid link or API error.`);
+        }
+    } catch (e) {
+        console.error("TikTok download error:", e);
+        await reply(`❌ Error downloading TikTok video: ${e.message}`);
+    }
+    break;
+}
 
-                case 'yt':
-                case 'youtube': {
-                    const url = args[0];
-                    const type = args[1] ? args[1].toLowerCase() : 'video';
+// CASE: YOUTUBE
+case 'yt':
+case 'youtube': {
+    const url = args[0];
+    const type = args[1] ? args[1].toLowerCase() : 'video';
 
-                    if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
-                        return reply(`⚠️ Usage: .yt [YouTube Link] [video/audio]\nExample: .yt https://youtu.be/xxxx video\nExample: .yt https://youtu.be/xxxx audio\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                    }
+    if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
+        return reply(`⚠️ Usage: .yt [YouTube Link] [video/audio]\nExample: .yt https://youtu.be/xxxx video\nExample: .yt https://youtu.be/xxxx audio\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+    }
 
-                    try {
-                        await reply(`📥 Processing YouTube download... Please wait ⏳`);
-                        
-                        if (type === 'audio') {
-                            const apiRes = await axios.get(`https://itzpire.com/download/ytmp3?url=${encodeURIComponent(url)}`);
-                            if (!apiRes.data || !apiRes.data.status) return reply(`❌ Failed to fetch audio.`);
-                            
-                            const audioUrl = apiRes.data.data.audio;
-                            const title = apiRes.data.data.title || 'YouTube Audio';
+    try {
+        await reply(`📥 Processing YouTube download... Please wait ⏳`);
+        
+        if (type === 'audio') {
+            const apiRes = await axios.get(`https://api.vreden.web.id/api/ytmp3?url=${encodeURIComponent(url)}`);
+            if (!apiRes.data || !apiRes.data.status) return reply(`❌ Failed to fetch audio.`);
+            
+            const audioUrl = apiRes.data.result.download.url || apiRes.data.result.url;
 
-                            await socket.sendMessage(sender, {
-                                audio: { url: audioUrl },
-                                mimetype: 'audio/mpeg',
-                                ptt: false,
-                                fileName: `${title}.mp3`
-                            }, { quoted: msg });
+            await socket.sendMessage(sender, {
+                audio: { url: audioUrl },
+                mimetype: 'audio/mpeg',
+                fileName: `youtube_audio.mp3`
+            }, { quoted: msg });
 
-                        } else {
-                            const apiRes = await axios.get(`https://itzpire.com/download/ytmp4?url=${encodeURIComponent(url)}`);
-                            if (!apiRes.data || !apiRes.data.status) return reply(`❌ Failed to fetch video.`);
-                            
-                            const videoUrl = apiRes.data.data.url;
-                            const title = apiRes.data.data.title || 'YouTube Video';
+        } else {
+            const apiRes = await axios.get(`https://api.vreden.web.id/api/ytmp4?url=${encodeURIComponent(url)}`);
+            if (!apiRes.data || !apiRes.data.status) return reply(`❌ Failed to fetch video.`);
+            
+            const videoUrl = apiRes.data.result.download.url || apiRes.data.result.url;
 
-                            await socket.sendMessage(sender, {
-                                video: { url: videoUrl },
-                                caption: `🎬 *YouTube Video*\n\n📝 Title: ${title}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`
-                            }, { quoted: msg });
-                        }
-                    } catch (e) {
-                        console.error("YouTube download error:", e);
-                        await reply(`❌ Failed to download YouTube media: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                    }
-                    break;
-                }
+            await socket.sendMessage(sender, {
+                video: { url: videoUrl },
+                caption: `🎬 *YouTube Video*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`
+            }, { quoted: msg });
+        }
+    } catch (e) {
+        console.error("YouTube download error:", e);
+        await reply(`❌ Failed to download YouTube media: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+    }
+    break;
+}
 
 
                     
