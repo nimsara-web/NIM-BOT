@@ -105,6 +105,8 @@ function getMessageBody(msg) {
             message.extendedTextMessage?.text || 
             message.imageMessage?.caption || 
             message.videoMessage?.caption || '';
+} // 👈 මෙන්න මෙතන getMessageBody ෆන්ක්ෂන් එක වැහුණා!
+
 function setupCommandHandlers(socket, number) {
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
@@ -164,7 +166,7 @@ function setupCommandHandlers(socket, number) {
 
 
         // ==========================================
-        // 🤖 AUTO-REPLY LOGIC (දැන් මෙතනටත් reply function එක වැඩ කරයි)
+        // 🤖 AUTO-REPLY LOGIC
         // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off'; 
 
