@@ -772,7 +772,7 @@ function setupCommandHandlers(socket, number) {
                         return reply(`⚠️ Usage: ${pfx}autolike on  OR  ${pfx}autolike off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
-                    await handleSettingUpdate("AUTO_LIKE_STATUS", normalized,, reply, number); // (Note: keep your original reply/number args clean as you had)
+                    await handleSettingUpdate("AUTO_LIKE_STATUS", normalized, reply, number);
                     break;
                 }
                 case 'alwaysonline': {
