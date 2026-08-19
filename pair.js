@@ -441,7 +441,6 @@ function setupCommandHandlers(socket, number) {
 
                         await reply(`🎵 Found: *${video.title}*\n⏱️ Duration: ${video.timestamp}\n📥 Downloading audio, please wait...`);
 
-                        // Using Itzpire stable API
                         const apiRes = await axios.get(`https://itzpire.com/download/ytmp3?url=${encodeURIComponent(video.url)}`);
                         if (!apiRes.data || !apiRes.data.status || !apiRes.data.data.audio) {
                             return reply(`❌ Download failed from API. Try again later.`);
@@ -481,7 +480,6 @@ function setupCommandHandlers(socket, number) {
 
                     await reply(`📥 Downloading TikTok video... Please wait ⏳`);
                     try {
-                        // Using Itzpire TikTok downloader API to bypass 403 blocks
                         const response = await axios.get(`https://itzpire.com/download/tiktok?url=${encodeURIComponent(url)}`);
                         const resData = response.data;
 
