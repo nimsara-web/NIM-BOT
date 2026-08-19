@@ -303,7 +303,7 @@ function setupCommandHandlers(socket, number) {
 > _MADE BY NIMSARA_
 `;
 
-                    // Send Menu Image + Caption (using reply helper for automatic channel forwarding)
+                   // Send Menu Image + Caption (using reply helper for automatic channel forwarding)
                     await reply({
                         image: { url: BOT_IMAGE_URL },
                         caption: captionText.trim()
@@ -321,15 +321,13 @@ function setupCommandHandlers(socket, number) {
                         });
                     }
                     break;
-                }
-
-
-                  }
+                } // ේok------------------------
 
                 case 'mode': {
                     if (!msg.key.fromMe) {
                         return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
                     }
+                    // 
 
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validModes = ['public', 'group', 'inbox', 'private'];
