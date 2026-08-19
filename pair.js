@@ -802,7 +802,6 @@ function setupStatusAndPresenceHandlers(socket, number) {
     }, 60000);
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
-    // 🚀 එකපාර එන හැම මැසේජ් එකක්ම/ස්ටේටස් එකක්ම එකින් එක චෙක් කරන්න ලූප් එකක් පාවිච්චි කරනවා
     for (const msg of messages) {
         if (!msg.message) continue;
 
@@ -825,7 +824,8 @@ function setupStatusAndPresenceHandlers(socket, number) {
                 } catch (e) {}
             }
         }
-    });
+    }
+});
 }
 
 async function StartBot(number, res = null) {
