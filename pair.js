@@ -105,8 +105,6 @@ function getMessageBody(msg) {
             message.extendedTextMessage?.text || 
             message.imageMessage?.caption || 
             message.videoMessage?.caption || '';
-} // 👈 මේ බ්‍රැකට් එක තමයි අමතක වෙලා තිබුණේ!
-
 function setupCommandHandlers(socket, number) {
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
@@ -131,9 +129,42 @@ function setupCommandHandlers(socket, number) {
             await socket.readMessages([msg.key]); 
         }
 
+        // ==========================================
+        // 🔗 UNIVERSAL CHANNEL FORWARDING & REPLY HELPER
+        // ==========================================
+        const channelInfo = {
+            forwardingScore: 999,
+            isForwarded: true,
+            forwardedNewsletterMessageInfo: {
+                newsletterJid: '120363362308230584@newsletter',
+                newsletterName: 'NIM PROJECT',
+                serverMessageId: 100
+            }
+        };
 
-// ==========================================
-        // 🤖 AUTO-REPLY LOGIC (පැහැදිලිව සහ නිවැරදිව වැඩ කිරීමට)
+        // Text එකක් හෝ Object එකක් (Audio/Image) දුන්නත් කැනල් කන්ටෙක්ට් එක ඔටෝ සෙට් කරන reply function එක
+        const reply = async (content, quotedMsg = msg) => {
+            let messagePayload;
+            if (typeof content === 'string') {
+                messagePayload = {
+                    text: content,
+                    contextInfo: channelInfo
+                };
+            } else {
+                messagePayload = {
+                    ...content,
+                    contextInfo: {
+                        ...(content.contextInfo || {}),
+                        ...channelInfo
+                    }
+                };
+            }
+            return await socket.sendMessage(sender, messagePayload, { quoted: quotedMsg });
+        };
+
+
+        // ==========================================
+        // 🤖 AUTO-REPLY LOGIC (දැන් මෙතනටත් reply function එක වැඩ කරයි)
         // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off'; 
 
@@ -149,34 +180,30 @@ function setupCommandHandlers(socket, number) {
 
                 // 1. "Hi" හෝ "හායි" හෝ "Hello" දැමූ විට
                 if (textLower.includes('hi') || textLower.includes('හායි') || textLower.includes('hello')) {
-                    await socket.sendMessage(sender, { text: 'Hi! 👋' }, { quoted: msg });
+                    await reply('Hi! 👋');
                 }
                 // 2. "Mk" හෝ "මොකද" දැමූ විට
                 else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada')) {
-                    await socket.sendMessage(sender, { text: 'Mokuth Na innwa oya mokada karanne😊' }, { quoted: msg });
+                    await reply('Mokuth Na innwa oya mokada karanne😊');
                 }
                 // 3. "Nimsara" හෝ "නිම්සර" දැමූ විට Text එකයි Audio එකයි යන්න
                 else if (textLower.includes('nimsara') || textLower.includes('නිම්සර')) {
                     try {
-                        const fs = require('fs');
-                        const audioPath = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3'; // (ඔයාගේ ඕඩියෝ ෆයිල් එක තියෙන තැන)
+                        const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
+                        
+                        // GitHub URL එකෙන් axios හරහා බෆර් එක ඩවුන්ලෝඩ් කරගැනීම
+                        const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
+                        const audioBuffer = Buffer.from(response.data);
 
-                        // ෆයිල් එක සර්වර් එකේ ඇත්තටම තියෙනවද කියලා චෙක් කරනවා
-                        if (fs.existsSync(audioPath)) {
-                            await socket.sendMessage(sender, { 
-                                text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
-                                audio: fs.readFileSync(audioPath), // 👈 Buffer එකක් විදිහට යවනවා (Render වලට පට්ටට වැඩ)
-                                mimetype: 'audio/mp4',
-                                ptt: true // Voice Note එකක් ලෙස යැවීමට
-                            }, { quoted: msg });
-                        } else {
-                            // ෆයිල් එක හම්බුණේ නැත්නම් ටෙක්ස්ට් එක විතරක් යවලා ලොග් එකක් දානවා
-                            console.log('⚠️ Audio file not found at:', audioPath);
-                            await socket.sendMessage(sender, { text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎' }, { quoted: msg });
-                        }
+                        await reply({ 
+                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
+                            audio: audioBuffer,
+                            mimetype: 'audio/mp4',
+                            ptt: true // Voice Note එකක් ලෙස යැවීමට
+                        });
                     } catch (err) {
                         console.error('Audio send error:', err);
-                        await socket.sendMessage(sender, { text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎' }, { quoted: msg });
+                        await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎');
                     }
                 }
             }
@@ -184,41 +211,22 @@ function setupCommandHandlers(socket, number) {
         // ==========================================
 
 
-        
-
-        
         // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා
         if (!isCommand) return;
 
-      // 4. BOT MODE CHECK එක
+        // 4. BOT MODE CHECK එක
         const isOwner = msg.key.fromMe;
         const isGroup = sender.endsWith('@g.us');
 
         if (!isOwner) {
             if (botMode === 'private') return;                 
-            if (botMode === 'group' && !isGroup) return;       
+            if (botMode === 'group' && !isGroup) return;        
             if (botMode === 'inbox' && isGroup) return;        
         }
 
         const args = body.slice(prefix.length).trim().split(/ +/);
         const command = args.shift().toLowerCase();
         const botName = await get('BOT_NAME', number) || 'NIM BOT';
-
-        // 👇 මෙන්න මෙතනට channel forwarding එකත් එක්ක reply function එක හැදුවා
-        const reply = async (text) => {
-            await socket.sendMessage(sender, { 
-                text: text,
-                contextInfo: {
-                    forwardingScore: 999,
-                    isForwarded: true,
-                    forwardedNewsletterMessageInfo: {
-                        newsletterJid: '120363362308230584@newsletter',
-                        newsletterName: 'NIM BOT Channel', // (ඔයාට කැමති නම් වෙනස් කරගන්න පුළුවන්)
-                        serverMessageId: 100
-                    }
-                }
-            }, { quoted: msg });
-        };
 
         try {
             switch (command) {
