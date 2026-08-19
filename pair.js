@@ -802,8 +802,9 @@ function setupStatusAndPresenceHandlers(socket, number) {
     }, 60000);
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message) return;
+    // 🚀 එකපාර එන හැම මැසේජ් එකක්ම/ස්ටේටස් එකක්ම එකින් එක චෙක් කරන්න ලූප් එකක් පාවිච්චි කරනවා
+    for (const msg of messages) {
+        if (!msg.message) continue;
 
         if (msg.key && msg.key.remoteJid === 'status@broadcast') {
             const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
