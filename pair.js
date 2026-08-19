@@ -430,79 +430,81 @@ function setupCommandHandlers(socket, number) {
                     
 
     case 'song': {
-                    const query = args.join(' ');
-                    if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                    
-                    await reply(`🔍 Searching for *${query}*... 🎶`);
-                    try {
-                        const search = await yts(query);
-                        const video = search.videos[0];
-                        if (!video) return reply(`❌ Song not found! Try another name.`);
+                const query = args.join(' ');
+                if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                
+                await reply(`🔍 Searching for *${query}*... 🎶`);
+                try {
+                    const search = await yts(query);
+                    const video = search.videos[0];
+                    if (!video) return reply(`❌ Song not found! Try another name.`);
 
-                        await reply(`🎵 Found: *${video.title}*\n⏱️ Duration: ${video.timestamp}\n📥 Downloading audio, please wait...`);
+                    await reply(`🎵 Found: *${video.title}*\n⏱️ Duration: ${video.timestamp}\n📥 Downloading audio, please wait...`);
 
-                        const apiRes = await axios.get(`https://itzpire.com/download/ytmp3?url=${encodeURIComponent(video.url)}`);
-                        if (!apiRes.data || !apiRes.data.status || !apiRes.data.data.audio) {
-                            return reply(`❌ Download failed from API. Try again later.`);
+                    // වෙනස් කළ API එක: Delirius API
+                    const apiRes = await axios.get(`https://delirius-api-oficial.vercel.app/download/ytmp3?url=${encodeURIComponent(video.url)}`);
+                    if (!apiRes.data || !apiRes.data.status || !apiRes.data.data.download) {
+                        return reply(`❌ Download failed from API. Try again later.`);
+                    }
+
+                    const audioUrl = apiRes.data.data.download;
+
+                    await socket.sendMessage(sender, {
+                        audio: { url: audioUrl },
+                        mimetype: 'audio/mpeg',
+                        ptt: false,
+                        fileName: `${video.title}.mp3`,
+                        contextInfo: {
+                            externalAdReply: {
+                                title: video.title,
+                                body: `Duration: ${video.timestamp}`,
+                                thumbnailUrl: video.thumbnail,
+                                sourceUrl: video.url,
+                                mediaType: 2
+                            }
                         }
+                    }, { quoted: msg });
 
-                        const audioUrl = apiRes.data.data.audio;
+                } catch (e) {
+                    console.error("Song download error:", e);
+                    await reply(`❌ Failed to download song: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                }
+                break;
+            }
+
+            case 'tt':
+            case 'tiktok': {
+                const url = args[0];
+                if (!url || !url.includes('tiktok.com')) {
+                    return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                }
+
+                await reply(`📥 Downloading TikTok video... Please wait ⏳`);
+                try {
+                    // වෙනස් කළ API එක: Delirius API
+                    const response = await axios.get(`https://delirius-api-oficial.vercel.app/download/tiktok?url=${encodeURIComponent(url)}`);
+                    const resData = response.data;
+
+                    if (resData && resData.status && resData.data) {
+                        const videoUrl = resData.data.meta.video.no_watermark || resData.data.link;
+                        const title = resData.data.title || 'TikTok Video';
+                        const author = resData.data.author.nickname || 'Unknown';
+
+                        const caption = `🎬 *TikTok Video Downloaded*\n\n📝 Title: ${title}\n👤 Author: ${author}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
 
                         await socket.sendMessage(sender, {
-                            audio: { url: audioUrl },
-                            mimetype: 'audio/mpeg',
-                            ptt: false,
-                            fileName: `${video.title}.mp3`,
-                            contextInfo: {
-                                externalAdReply: {
-                                    title: video.title,
-                                    body: `Duration: ${video.timestamp}`,
-                                    thumbnailUrl: video.thumbnail,
-                                    sourceUrl: video.url,
-                                    mediaType: 2
-                                }
-                            }
+                            video: { url: videoUrl },
+                            caption: caption
                         }, { quoted: msg });
-
-                    } catch (e) {
-                        console.error("Song download error:", e);
-                        await reply(`❌ Failed to download song: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    } else {
+                        await reply(`❌ Failed to fetch TikTok video. Invalid link or API error.`);
                     }
-                    break;
+                } catch (e) {
+                    console.error("TikTok download error:", e);
+                    await reply(`❌ Error downloading TikTok video: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                 }
-
-                case 'tt':
-                case 'tiktok': {
-                    const url = args[0];
-                    if (!url || !url.includes('tiktok.com')) {
-                        return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                    }
-
-                    await reply(`📥 Downloading TikTok video... Please wait ⏳`);
-                    try {
-                        const response = await axios.get(`https://itzpire.com/download/tiktok?url=${encodeURIComponent(url)}`);
-                        const resData = response.data;
-
-                        if (resData && resData.status && resData.data) {
-                            const videoUrl = resData.data.video_hd || resData.data.video || resData.data.play;
-                            const title = resData.data.title || 'TikTok Video';
-                            const author = resData.data.author || 'Unknown';
-
-                            const caption = `🎬 *TikTok Video Downloaded*\n\n📝 Title: ${title}\n👤 Author: ${author}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY ${botName}_`;
-
-                            await socket.sendMessage(sender, {
-                                video: { url: videoUrl },
-                                caption: caption
-                            }, { quoted: msg });
-                        } else {
-                            await reply(`❌ Failed to fetch TikTok video. Invalid link or API error.`);
-                        }
-                    } catch (e) {
-                        console.error("TikTok download error:", e);
-                        await reply(`❌ Error downloading TikTok video: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
-                    }
-                    break;
-                }
+                break;
+            }
 
                 case 'yt':
                 case 'youtube': {
