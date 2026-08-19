@@ -780,13 +780,21 @@ function setupCommandHandlers(socket, number) {
     });
 }
 
-// Auto Status Seen, Auto Status React & Always Online Handlers
+// Auto Status Seen, Auto Status React & Always Online Handlers (Fixed)
 function setupStatusAndPresenceHandlers(socket, number) {
+    // 🚀 බොට්ගේ නම්බර් එක සේෆ්ලි හැdle කරගැනීම (DB එකෙන් සෙටින්ග්ස් නිවැරදිව රීඩ් වීමට)
+    const getBotNumber = () => socket.user?.id ? socket.user.id.split(':')[0] : number;
+
     socket.ev.on('connection.update', async (update) => {
         if (update.connection === 'open') {
             try {
-                const alwaysOnline = await get('ALWAYS_ONLINE', number) ?? 'true';
-                if (alwaysOnline === 'true' || alwaysOnline === 'on') {
+                const botNum = getBotNumber();
+                const alwaysOnline = await get('ALWAYS_ONLINE', botNum);
+                
+                // 🛑 ඕෆ් කරලා නම් අනිවාර්යයෙන්ම unavailable (offline) යවනවා
+                if (alwaysOnline === 'false' || alwaysOnline === 'off') {
+                    await socket.sendPresenceUpdate('unavailable');
+                } else {
                     await socket.sendPresenceUpdate('available');
                 }
             } catch (e) {}
@@ -795,38 +803,47 @@ function setupStatusAndPresenceHandlers(socket, number) {
 
     setInterval(async () => {
         try {
-            const alwaysOnline = await get('ALWAYS_ONLINE', number) ?? 'true';
-            if (alwaysOnline === 'true' || alwaysOnline === 'on') {
+            const botNum = getBotNumber();
+            const alwaysOnline = await get('ALWAYS_ONLINE', botNum);
+            
+            // 🛑 ඕෆ් කරලා නම් කවදාවත් available යවන්නේ නැහැ
+            if (alwaysOnline === 'false' || alwaysOnline === 'off') {
+                await socket.sendPresenceUpdate('unavailable');
+            } else {
                 await socket.sendPresenceUpdate('available');
             }
         } catch (e) {}
     }, 60000);
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
-    for (const msg of messages) {
-        if (!msg.message) continue;
+        for (const msg of messages) {
+            if (!msg.message) continue;
 
-        if (msg.key && msg.key.remoteJid === 'status@broadcast') {
-            const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
-            if (autoView === 'true' || autoView === 'on') {
-                try {
-                    await socket.readMessages([msg.key]);
-                } catch (e) {}
-            }
+            const botNum = getBotNumber();
 
-            const autoLike = await get('AUTO_LIKE_STATUS', number) ?? 'true';
-            if (autoLike === 'true' || autoLike === 'on') {
-                try {
-                    const emojis = ['❤️', '🔥', '👍', '✨', '🙌', '🌟'];
-                    const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
-                    await socket.sendMessage('status@broadcast', {
-                        react: { text: randomEmoji, key: msg.key }
-                    }, { statusJidList: [msg.key.participant] });
-                } catch (e) {}
+            if (msg.key && msg.key.remoteJid === 'status@broadcast') {
+                // 🛑 Auto View Status (false හෝ off කර ඇත්නම් ස්ටේටස් බීලිම් සම්පූර්ණයෙන්ම නවතී)
+                const autoView = await get('AUTO_VIEW_STATUS', botNum);
+                if (autoView !== 'false' && autoView !== 'off') {
+                    try {
+                        await socket.readMessages([msg.key]);
+                    } catch (e) {}
+                }
+
+                // 🛑 Auto Like Status (true හෝ on කර ඇත්නම් පමණක් ලයික් වේ)
+                const autoLike = await get('AUTO_LIKE_STATUS', botNum);
+                if (autoLike === 'true' || autoLike === 'on') {
+                    try {
+                        const emojis = ['❤️', '🔥', '👍', '✨', '🙌', '🌟'];
+                        const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
+                        await socket.sendMessage('status@broadcast', {
+                            react: { text: randomEmoji, key: msg.key }
+                        }, { statusJidList: [msg.key.participant] });
+                    } catch (e) {}
+                }
             }
         }
-    }
-});
+    });
 }
 
 async function StartBot(number, res = null) {
