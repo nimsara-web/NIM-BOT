@@ -328,14 +328,15 @@ function setupCommandHandlers(socket, number) {
                     if (!msg.key.fromMe) {
                         return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
                     }
-                    // 
 
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validModes = ['public', 'group', 'inbox', 'private'];
                     
                     if (!validModes.includes(option)) {
+                        // 🚀 ඩේටබේස් එකෙන් වර්තමාන මෝඩ් එක ගෙනැවිත් පෙන්වයි
+                        const currentMode = await get('BOT_MODE', number) || 'public';
                         let msgText = "⚙️ *Bot Mode Settings*\n\n";
-                        msgText += `Current Mode: *${botMode.toUpperCase()}*\n\n`;
+                        msgText += `Current Mode: *${currentMode.toUpperCase()}*\n\n`;
                         msgText += "Available Modes:\n";
                         msgText += "• \`.mode public\`\n";
                         msgText += "• \`.mode group\`\n";
@@ -345,8 +346,8 @@ function setupCommandHandlers(socket, number) {
                         return reply(msgText);
                     }
 
-                    botMode = option;
-                    await reply(`✅ Bot mode successfully changed to: *${botMode.toUpperCase()}* 🚀`);
+                    // 🚀 ඩේටබේස් එකේ මෝඩ් එක ස්ථිරවම සේව් කිරීම (handleSettingUpdate හරහා)
+                    await handleSettingUpdate("BOT_MODE", option, reply, number);
                     break;
                 }
         
@@ -712,8 +713,12 @@ function setupCommandHandlers(socket, number) {
                     break;
                 }
                 case 'setprefix': {
+                    if (!msg.key.fromMe) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
                     const newPrefix = args[0];
-                    if (!newPrefix) return reply(`⚠️ Usage: .setprefix [New Prefix]\nExample: .setprefix !\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    const pfx = await get('PREFIX', number) || '.';
+                    if (!newPrefix) return reply(`⚠️ Usage: ${pfx}setprefix [New Prefix]\nExample: ${pfx}setprefix !\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     await handleSettingUpdate("PREFIX", newPrefix, reply, number);
                     break;
                 }
@@ -745,27 +750,39 @@ function setupCommandHandlers(socket, number) {
                     break;
                 }
                 case 'autoview': {
+                    if (!msg.key.fromMe) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
                     const val = args[0]?.toLowerCase();
+                    const pfx = await get('PREFIX', number) || '.';
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .autoview on  OR  .autoview off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        return reply(`⚠️ Usage: ${pfx}autoview on  OR  ${pfx}autoview off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("AUTO_VIEW_STATUS", normalized, reply, number);
                     break;
                 }
                 case 'autolike': {
+                    if (!msg.key.fromMe) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
                     const val = args[0]?.toLowerCase();
+                    const pfx = await get('PREFIX', number) || '.';
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .autolike on  OR  .autolike off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        return reply(`⚠️ Usage: ${pfx}autolike on  OR  ${pfx}autolike off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
-                    await handleSettingUpdate("AUTO_LIKE_STATUS", normalized, reply, number);
+                    await handleSettingUpdate("AUTO_LIKE_STATUS", normalized,, reply, number); // (Note: keep your original reply/number args clean as you had)
                     break;
                 }
                 case 'alwaysonline': {
+                    if (!msg.key.fromMe) {
+                        return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    }
                     const val = args[0]?.toLowerCase();
+                    const pfx = await get('PREFIX', number) || '.';
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .alwaysonline on  OR  .alwaysonline off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        return reply(`⚠️ Usage: ${pfx}alwaysonline on  OR  ${pfx}alwaysonline off\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("ALWAYS_ONLINE", normalized, reply, number);
