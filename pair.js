@@ -244,7 +244,7 @@ function setupCommandHandlers(socket, number) {
 
                     const captionText = `
 *👋${botName.toUpperCase()} 🧛🏻*
-*--  T𝗁𝖾 mini W𝗁𝖺𝗍𝗌𝖺𝗉𝗉 B𝗈𝗍 E𝗑𝗉𝖾𝗋𝗂𝖾𝗇𝖈𝖾 --*
+*-- T𝗁𝖾 Mini W𝗁𝖺𝗍𝗌𝖺𝗉p B𝗈𝗍 E𝗑𝗉𝖾𝗋𝗂𝖾𝗇𝖈𝖾 --*
 
 > Created By Nimsara 🧛🏻
 > 🪀 Contact - 0784280074
@@ -302,24 +302,26 @@ function setupCommandHandlers(socket, number) {
 
 > _MADE BY NIMSARA_
 `;
-                    // Send Menu Image + Caption
-                    await socket.sendMessage(sender, {
+
+                    // Send Menu Image + Caption (using reply helper for automatic channel forwarding)
+                    await reply({
                         image: { url: BOT_IMAGE_URL },
                         caption: captionText.trim()
-                    }, { quoted: msg });
+                    });
 
                     await delay(1500);
 
                     // Download and send Audio Buffer reliably
                     const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
                     if (audioBuffer) {
-                        await socket.sendMessage(sender, {
+                        await reply({
                             audio: audioBuffer,
                             mimetype: 'audio/mpeg',
                             ptt: false
-                        }, { quoted: msg });
+                        });
                     }
                     break;
+                }
 
 
                   }
@@ -873,9 +875,19 @@ async function StartBot(number, res = null) {
                         currentPrefix = await get('PREFIX', sanitizedNumber) || '.';
                     } catch (e) {}
 
+                    // කැනල් ෆෝවර්ඩ් කන්ටෙක්ට් එක මෙතනටත් දෙනවා
                     await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
                         image: { url: BOT_IMAGE_URL },
-                        caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> Creator: *Nimsara*`
+                        caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}* \n• Type *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> Creator: *Nimsara*`,
+                        contextInfo: {
+                            forwardingScore: 999,
+                            isForwarded: true,
+                            forwardedNewsletterMessageInfo: {
+                                newsletterJid: '120363362308230584@newsletter',
+                                newsletterName: 'NIM PROJECT',
+                                serverMessageId: 100
+                            }
+                        }
                     });
 
                     await delay(1500);
