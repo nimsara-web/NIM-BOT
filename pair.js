@@ -31,7 +31,7 @@ const Session = require('./Id');
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb'); 
 
 const SESSION_BASE_PATH = path.join(__dirname, './sessions');
-const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/blob/main/Data/Nim%20Bot%20New%20Logo.jpg';
+const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/blob/main/Data/WhatsApp%20Image%202026-08-27%20at%204.41.36%20PM.jpeg';
 const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcome%20nim%20new.MP3';
 const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r';
 
@@ -454,9 +454,9 @@ case 'song': {
 
         await reply(`🎵 Found: *${video.title}*\n📥 Downloading audio, please wait...`);
 
-        // NexRay API for ytmp3 (Safe URL query parameter formatting)
-        const apiRes = await nexray.get(`/downloader/ytmp3?url=${encodeURIComponent(video.url)}`);
-        const resData = apiRes.data || apiRes;
+        // Direct Axios request (Bypassing api-nexray package bug)
+        const apiRes = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp3?url=${encodeURIComponent(video.url)}`);
+        const resData = apiRes.data;
         
         if (!resData) {
             return reply(`❌ Download failed from API. Try again later.`);
@@ -498,9 +498,9 @@ case 'tiktok': {
 
     await reply(`📥 Downloading TikTok video... Please wait ⏳`);
     try {
-        // NexRay API for tiktok (Safe URL query parameter formatting)
-        const response = await nexray.get(`/downloader/tiktok?url=${encodeURIComponent(url)}`);
-        const resData = response.data || response;
+        // Direct Axios request (Bypassing api-nexray package bug)
+        const response = await axios.get(`https://api.nexray.eu.cc/downloader/tiktok?url=${encodeURIComponent(url)}`);
+        const resData = response.data;
 
         if (resData) {
             const resultObj = resData.result || resData;
@@ -535,8 +535,8 @@ case 'youtube': {
         await reply(`📥 Processing YouTube download... Please wait ⏳`);
         
         if (type === 'audio') {
-            const apiRes = await nexray.get(`/downloader/ytmp3?url=${encodeURIComponent(url)}`);
-            const resData = apiRes.data || apiRes;
+            const apiRes = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp3?url=${encodeURIComponent(url)}`);
+            const resData = apiRes.data;
             if (!resData) return reply(`❌ Failed to fetch audio.`);
             
             const resultObj = resData.result || resData;
@@ -549,8 +549,8 @@ case 'youtube': {
             }, { quoted: msg });
 
         } else {
-            const apiRes = await nexray.get(`/downloader/ytmp4?url=${encodeURIComponent(url)}`);
-            const resData = apiRes.data || apiRes;
+            const apiRes = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp4?url=${encodeURIComponent(url)}`);
+            const resData = apiRes.data;
             if (!resData) return reply(`❌ Failed to fetch video.`);
             
             const resultObj = resData.result || resData;
@@ -567,7 +567,6 @@ case 'youtube': {
     }
     break;
 }
-
 
                     
                 case 'alive':
