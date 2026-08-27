@@ -9,6 +9,7 @@
   "dependencies": {
     "@distube/ytdl-core": "latest",
     "baileys": "github:itsliaaa/baileys",
+    "api-nexray": "^1.0.3",
     "axios": "^1.6.8",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
