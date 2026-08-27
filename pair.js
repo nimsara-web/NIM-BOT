@@ -31,7 +31,7 @@ const Session = require('./Id');
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb'); 
 
 const SESSION_BASE_PATH = path.join(__dirname, './sessions');
-const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/blob/main/Data/WhatsApp%20Image%202026-08-27%20at%204.41.36%20PM.jpeg';
+const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/Nim-Bot-New-Logo.jfif';
 const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcome%20nim%20new.MP3';
 const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r';
 
