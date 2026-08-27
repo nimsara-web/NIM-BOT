@@ -31,7 +31,7 @@ const Session = require('./Id');
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb'); 
 
 const SESSION_BASE_PATH = path.join(__dirname, './sessions');
-const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/blob/main/Data/20260827_155921.jpg.jpeg';
+const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/blob/main/Data/Nim%20Bot%20New%20Logo.jpg';
 const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcome%20nim%20new.MP3';
 const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r';
 
@@ -441,7 +441,7 @@ function setupCommandHandlers(socket, number) {
 
                     
 
-    // CASE: SONG
+   // CASE: SONG
 case 'song': {
     const query = args.join(' ');
     if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
@@ -454,8 +454,8 @@ case 'song': {
 
         await reply(`🎵 Found: *${video.title}*\n📥 Downloading audio, please wait...`);
 
-        // NexRay API for ytmp3
-        const apiRes = await nexray.get('/downloader/ytmp3', { url: video.url });
+        // NexRay API for ytmp3 (Safe URL query parameter formatting)
+        const apiRes = await nexray.get(`/downloader/ytmp3?url=${encodeURIComponent(video.url)}`);
         const resData = apiRes.data || apiRes;
         
         if (!resData) {
@@ -498,13 +498,13 @@ case 'tiktok': {
 
     await reply(`📥 Downloading TikTok video... Please wait ⏳`);
     try {
-        // NexRay API for tiktok
-        const response = await nexray.get('/downloader/tiktok', { url: url });
+        // NexRay API for tiktok (Safe URL query parameter formatting)
+        const response = await nexray.get(`/downloader/tiktok?url=${encodeURIComponent(url)}`);
         const resData = response.data || response;
 
         if (resData) {
             const resultObj = resData.result || resData;
-            const videoUrl = resultObj.no_watermark || resultObj.nowm || resultObj.video || resultObj.data?.no_watermark;
+            const videoUrl = resultObj.no_watermark || resultObj.nowm || resultObj.video || resultObj.data?.no_watermark || resultObj.dl_url;
             const caption = `🎬 *TikTok Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
 
             await socket.sendMessage(sender, {
@@ -535,7 +535,7 @@ case 'youtube': {
         await reply(`📥 Processing YouTube download... Please wait ⏳`);
         
         if (type === 'audio') {
-            const apiRes = await nexray.get('/downloader/ytmp3', { url: url });
+            const apiRes = await nexray.get(`/downloader/ytmp3?url=${encodeURIComponent(url)}`);
             const resData = apiRes.data || apiRes;
             if (!resData) return reply(`❌ Failed to fetch audio.`);
             
@@ -549,7 +549,7 @@ case 'youtube': {
             }, { quoted: msg });
 
         } else {
-            const apiRes = await nexray.get('/downloader/ytmp4', { url: url });
+            const apiRes = await nexray.get(`/downloader/ytmp4?url=${encodeURIComponent(url)}`);
             const resData = apiRes.data || apiRes;
             if (!resData) return reply(`❌ Failed to fetch video.`);
             
