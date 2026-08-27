@@ -14,7 +14,7 @@
         }
         body {
             font-family: 'Rajdhani', sans-serif;
-            background: #050505;
+            background: #030712;
             color: #fff;
             height: 100vh;
             display: flex;
@@ -24,7 +24,7 @@
             position: relative;
         }
 
-        /* Falling Stars Canvas Background */
+        /* Animated Cyan Particles Canvas Background */
         #stars-canvas {
             position: absolute;
             top: 0;
@@ -34,84 +34,97 @@
             z-index: -1;
         }
 
-        /* Main Glassmorphism Anime Card */
+        /* Main Glassmorphism Anime Card with Blue Neon */
         .card {
-            background: rgba(15, 15, 15, 0.85);
+            background: rgba(8, 15, 30, 0.85);
             padding: 35px 30px;
-            border-radius: 16px;
-            border: 2px solid rgba(229, 9, 20, 0.4);
-            box-shadow: 0 0 25px rgba(229, 9, 20, 0.3), inset 0 0 15px rgba(229, 9, 20, 0.1);
+            border-radius: 18px;
+            border: 2px solid rgba(0, 212, 255, 0.4);
+            box-shadow: 0 0 30px rgba(0, 162, 255, 0.25), inset 0 0 20px rgba(0, 212, 255, 0.1);
             text-align: center;
             width: 90%;
             max-width: 420px;
             z-index: 10;
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(12px);
+            animation: cardEntrance 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes cardEntrance {
+            from { opacity: 0; transform: scale(0.95) translateY(20px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
         }
 
         .card h2 {
-            font-size: 28px;
-            color: #ff1e38;
+            font-size: 32px;
+            color: #00d4ff;
             margin-bottom: 8px;
             text-transform: uppercase;
-            letter-spacing: 2px;
-            text-shadow: 0 0 10px rgba(255, 30, 56, 0.5);
+            letter-spacing: 3px;
+            text-shadow: 0 0 15px rgba(0, 212, 255, 0.6);
         }
 
         .card p {
-            color: #b3b3b3;
+            color: #94a3b8;
             margin-bottom: 25px;
             font-size: 16px;
+            letter-spacing: 0.5px;
         }
 
         .card p b {
-            color: #fff;
+            color: #e2e8f0;
         }
 
         input {
-            padding: 12px 15px;
+            padding: 14px 18px;
             width: 100%;
-            border-radius: 8px;
-            border: 1px solid #333;
-            background: #0a0a0a;
+            border-radius: 10px;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            background: rgba(3, 7, 18, 0.9);
             color: #fff;
             margin-bottom: 20px;
             font-size: 16px;
             font-family: 'Rajdhani', sans-serif;
             outline: none;
-            transition: 0.3s;
+            transition: all 0.3s ease;
         }
 
         input:focus {
-            border-color: #ff1e38;
-            box-shadow: 0 0 8px rgba(255, 30, 56, 0.4);
+            border-color: #00d4ff;
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.5);
+            background: rgba(5, 13, 30, 0.95);
         }
 
         button {
-            padding: 12px 20px;
+            padding: 14px 20px;
             width: 100%;
-            background: linear-gradient(135deg, #cc0000, #ff1e38);
+            background: linear-gradient(135deg, #0072ff, #00d4ff);
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             font-weight: bold;
             font-size: 18px;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            transition: 0.3s;
+            letter-spacing: 1.5px;
+            transition: all 0.3s ease;
             font-family: 'Rajdhani', sans-serif;
+            box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4);
         }
 
         button:hover {
-            background: linear-gradient(135deg, #ff1e38, #ff334b);
-            box-shadow: 0 0 15px rgba(255, 30, 56, 0.6);
-            transform: translateY(-2px);
+            background: linear-gradient(135deg, #0099ff, #38bdf8);
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.8);
+            transform: translateY(-3px);
+        }
+
+        button:active {
+            transform: translateY(-1px);
         }
 
         #code {
             margin-top: 20px;
             font-size: 18px;
-            color: #ff334b;
+            color: #38bdf8;
             font-weight: bold;
         }
 
@@ -120,9 +133,9 @@
             position: fixed;
             top: 20px;
             right: 20px;
-            background: rgba(20, 20, 20, 0.9);
-            border: 2px solid #ff1e38;
-            color: #ff1e38;
+            background: rgba(8, 15, 30, 0.9);
+            border: 2px solid #00d4ff;
+            color: #00d4ff;
             width: 45px;
             height: 45px;
             border-radius: 50%;
@@ -131,14 +144,16 @@
             align-items: center;
             cursor: pointer;
             z-index: 100;
-            box-shadow: 0 0 10px rgba(255, 30, 56, 0.4);
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.4);
             font-size: 20px;
-            transition: 0.3s;
+            transition: all 0.3s ease;
         }
 
         .sound-icon:hover {
-            background: #ff1e38;
-            color: #fff;
+            background: #00d4ff;
+            color: #030712;
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.8);
+            transform: rotate(15deg);
         }
 
         /* Floating Support Icon & Modal (Bottom Right) */
@@ -150,7 +165,7 @@
         }
 
         .support-btn {
-            background: #ff1e38;
+            background: linear-gradient(135deg, #0072ff, #00d4ff);
             color: white;
             width: 55px;
             height: 55px;
@@ -159,15 +174,15 @@
             justify-content: center;
             align-items: center;
             cursor: pointer;
-            box-shadow: 0 0 15px rgba(255, 30, 56, 0.6);
+            box-shadow: 0 0 18px rgba(0, 212, 255, 0.6);
             font-size: 26px;
-            transition: 0.3s;
-            border: 2px solid #fff;
+            transition: all 0.3s ease;
+            border: 2px solid rgba(255, 255, 255, 0.8);
         }
 
         .support-btn:hover {
-            transform: scale(1.1);
-            background: #cc0000;
+            transform: scale(1.1) rotate(10deg);
+            box-shadow: 0 0 25px rgba(0, 212, 255, 0.9);
         }
 
         /* Support Popup Card */
@@ -176,20 +191,22 @@
             position: absolute;
             bottom: 70px;
             right: 0;
-            background: rgba(15, 15, 15, 0.95);
-            border: 2px solid #ff1e38;
+            background: rgba(8, 15, 30, 0.95);
+            border: 2px solid #00d4ff;
             padding: 15px 20px;
             border-radius: 12px;
-            box-shadow: 0 0 20px rgba(255, 30, 56, 0.4);
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
             text-align: center;
             width: 240px;
             animation: fadeIn 0.3s ease;
+            backdrop-filter: blur(10px);
         }
 
         .support-modal h4 {
-            color: #ff1e38;
+            color: #00d4ff;
             margin-bottom: 5px;
             font-size: 18px;
+            letter-spacing: 1px;
         }
 
         .support-modal p {
@@ -197,6 +214,7 @@
             font-size: 16px;
             font-weight: bold;
             margin: 0;
+            letter-spacing: 1px;
         }
 
         @keyframes fadeIn {
@@ -207,12 +225,12 @@
 </head>
 <body>
 
-    <!-- Falling Stars Canvas -->
+    <!-- Falling Slow-Motion Cyan Particles Canvas -->
     <canvas id="stars-canvas"></canvas>
 
     <!-- Background Audio (Anime Vibe Loop) -->
     <audio id="bg-audio" loop>
-        <source src="https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/mere%20sapno%20ki%20rani%20x%20the%20box%20audio%20edit%20EV1L7GT_.mp3" type="audio/mpeg">
+        <source src="https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/MASHUQ%20HAQUE%20-%20AIRTEL%20PHONK%20%20A.%20R.%20RAHMAN%20(PHONK).mp3" type="audio/mpeg">
     </audio>
 
     <!-- Sound Control Toggle Icon -->
@@ -241,7 +259,7 @@
     </div>
 
     <script>
-        /* --- Falling Stars Background Effect --- */
+        /* --- Slow-Motion Floating Cyan Particle Effect --- */
         const canvas = document.getElementById('stars-canvas');
         const ctx = canvas.getContext('2d');
 
@@ -253,40 +271,43 @@
             height = canvas.height = window.innerHeight;
         });
 
-        const stars = [];
-        const numStars = 120;
+        const particles = [];
+        const numParticles = 80;
 
-        for (let i = 0; i < numStars; i++) {
-            stars.push({
+        for (let i = 0; i < numParticles; i++) {
+            particles.push({
                 x: Math.random() * width,
                 y: Math.random() * height,
-                size: Math.random() * 2 + 0.5,
-                speed: Math.random() * 1.5 + 0.5,
-                opacity: Math.random()
+                size: Math.random() * 2.5 + 1,
+                speed: Math.random() * 0.6 + 0.2, // Slow motion effect
+                opacity: Math.random() * 0.8 + 0.2
             });
         }
 
-        function animateStars() {
+        function animateParticles() {
             ctx.clearRect(0, 0, width, height);
-            ctx.fillStyle = '#ffffff';
-
-            stars.forEach(star => {
-                ctx.globalAlpha = star.opacity;
+            
+            particles.forEach(p => {
+                ctx.globalAlpha = p.opacity;
+                ctx.fillStyle = '#00d4ff'; // Cyan glowing particles
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#00d4ff';
+                
                 ctx.beginPath();
-                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Move star downwards
-                star.y += star.speed;
-                if (star.y > height) {
-                    star.y = 0;
-                    star.x = Math.random() * width;
+                // Move particle downwards slowly
+                p.y += p.speed;
+                if (p.y > height) {
+                    p.y = 0;
+                    p.x = Math.random() * width;
                 }
             });
 
-            requestAnimationFrame(animateStars);
+            requestAnimationFrame(animateParticles);
         }
-        animateStars();
+        animateParticles();
 
         /* --- Audio Toggle Function --- */
         const audio = document.getElementById('bg-audio');
@@ -318,7 +339,7 @@
             }
         }
 
-        /* --- Pair Code Fetch Function --- */
+        /* --- Pair Code Fetch Function (Untouched Logic) --- */
         async function getPairCode() {
             const num = document.getElementById('number').value;
             const codeDiv = document.getElementById('code');
@@ -331,7 +352,7 @@
                 const res = await fetch(`/pair?number=${num}`);
                 const data = await res.json();
                 if (data.code) {
-                    codeDiv.innerHTML = `Your Pairing Code: <br><span style="font-size:26px; background:#1a0000; border: 1px solid #ff1e38; padding:8px 15px; border-radius:6px; display:inline-block; margin-top:10px; color:#ff334b; letter-spacing:1px;">${data.code}</span>`;
+                    codeDiv.innerHTML = `Your Pairing Code: <br><span style="font-size:26px; background:rgba(3, 7, 18, 0.9); border: 1px solid #00d4ff; padding:8px 15px; border-radius:8px; display:inline-block; margin-top:10px; color:#38bdf8; letter-spacing:2px; box-shadow: 0 0 10px rgba(0, 212, 255, 0.4);">${data.code}</span>`;
                 } else {
                     codeDiv.innerHTML = "Error generating code. Try again.";
                 }
