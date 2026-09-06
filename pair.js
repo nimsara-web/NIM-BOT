@@ -379,7 +379,7 @@ id - 842717887
                     break;
                 }
 
-                // 👇 JID කමාන්ඩ් එක දාන්න ඕන මෙන්න මෙතනටයි:
+                // 👇 JID කමාන්ඩ් 
                 case 'jid': {
                     const inputArg = args[0] || '';
                     
@@ -423,6 +423,47 @@ id - 842717887
                     await reply(jidText.trim(), msg);
                     break;
                 }
+
+                    // 👇 AI CHATBOT
+    case 'ai':
+    case 'gpt': {
+        const query = args.join(' ');
+        if (!query) return reply(`⚠️ Please provide a question or prompt for AI!\nExample: .ai What is the capital of Sri Lanka?\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+        
+        await reply(`🤖 Thinking... please wait... 🧠`);
+        try {
+            const apiKey = process.env.GEMINI_API_KEY; // 
+            if (!apiKey) return reply(`❌ Gemini API Key is not set in environment variables!`);
+            
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+            const apiRes = await axios.post(apiUrl, {
+                contents: [{ parts: [{ text: query }] }]
+            });
+
+            const aiAnswer = apiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+            if (!aiAnswer) {
+                return reply(`❌ AI එකෙන් උත්තරයක් ලබාගන්න බැරි වුණා මචං. ටික වේලාවකින් නැවත උත්සාහ කරන්න.`);
+            }
+
+            const aiResponseText = `
+🤖 *AI ASSISTANT* 🤖
+
+${aiAnswer.trim()}
+
+🔗 *Channel:* ${BOT_CHANNEL_LINK}
+`;
+
+            await reply(aiResponseText.trim(), msg);
+
+        } catch (e) {
+            console.error("AI command error:", e);
+            await reply(`❌ AI Error: ${e.message}`);
+        }
+        break;
+    }
+
 
                 case 'allmenu':
                 case 'menu':
