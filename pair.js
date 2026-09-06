@@ -490,7 +490,7 @@ id - 842717887
 *╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
 *╰───────────────────────*
 
-🔗 Web: Pending
+🔗 Web: https://nimsara-official.vercel.app/
 
 *🏮 FOLLOW MINE CHANNEL :- ${BOT_CHANNEL_LINK}*
 
