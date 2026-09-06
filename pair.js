@@ -297,12 +297,13 @@ function setupCommandHandlers(socket, number) {
         if (botMode === 'private') return;                 
         if (botMode === 'group' && !isGroup) return;        
         if (botMode === 'inbox' && isGroup) return;        
-    }
+   }
 
-    const args = body.slice(prefix.length).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-    const botName = await get('BOT_NAME', number) || 'NIM BOT';
-
+        // කලින් args declare කරලා තියෙන නිසා මෙතන const අයින් කරලා කෙලින්ම assign කරන්න
+        args = body.slice(prefix.length).trim().split(/ +/);
+        const command = args.shift().toLowerCase();
+        const botName = await get('BOT_NAME', number) || 'NIM BOT';
+        
         try {
             switch (command) {
                 case 'allmenu':
