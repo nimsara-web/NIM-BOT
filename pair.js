@@ -323,6 +323,52 @@ socket.ev.on('messages.update', async (updates) => {
                     }, lastDeleted.originalMsg);
                     break;
                 }
+
+                // 👇 JID කමාන්ඩ් එක දාන්න ඕන මෙන්න මෙතනටයි:
+                case 'jid': {
+                    const inputArg = args[0] || '';
+                    
+                    if (inputArg.includes('chat.whatsapp.com')) {
+                        try {
+                            const match = inputArg.match(/(?:https:\/\/)?(?:chat\.whatsapp\.com\/)([0-9A-Za-z]{20,24})/i);
+                            if (match && match[1]) {
+                                const inviteCode = match[1];
+                                const groupInfo = await socket.groupGetInviteInfo(inviteCode);
+                                
+                                const groupLinkJidText = `
+🔗 *GROUP JID FROM LINK* 🔗
+
+🏷️ *Group Name:* ${groupInfo.subject || 'Unknown'}
+📌 *Group JID:* \`${groupInfo.id}\`
+👥 *Participants:* ${groupInfo.size || 'N/A'}
+`;
+                                await reply(groupLinkJidText.trim(), msg);
+                                return;
+                            }
+                        } catch (err) {
+                            await reply('❌ මේ WhatsApp group link එක වැරදියි හෝ ලින්ක් එක හරහා ගෘප් විස්තර ලබාගන්න බැං!', msg);
+                            return;
+                        }
+                    }
+
+                    const chatJid = msg.key.remoteJid;
+                    const senderJid = msg.key.participant || msg.key.remoteJid;
+                    const quotedJid = msg.message?.extendedTextMessage?.contextInfo?.participant || 
+                                      msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || 
+                                      'None';
+
+                    const jidText = `
+📍 *JID INFORMATION* 📍
+
+💬 *Chat JID:* \`${chatJid}\`
+👤 *Sender JID:* \`${senderJid}\`
+🎯 *Quoted/Target JID:* \`${quotedJid}\`
+`;
+
+                    await reply(jidText.trim(), msg);
+                    break;
+                }
+
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
