@@ -38,9 +38,6 @@ const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r'
 // Global tracking maps
 const socketCreationTime = new Map();
 const activeSockets = new Map();
-// Global tracking maps for Anti-Delete / Message Recovery
-const messageCache = new Map();     // 
-const deletedMessages = new Map();  // 
 
 // Helper to download audio as a Buffer to ensure 100% playback success
 async function getAudioBuffer(url) {
@@ -109,49 +106,12 @@ function getMessageBody(msg) {
             message.extendedTextMessage?.text || 
             message.imageMessage?.caption || 
             message.videoMessage?.caption || '';
-}
+} // 👈 මෙන්න මෙතන getMessageBody ෆන්ක්ෂන් එක වැහුණා!
 
 function setupCommandHandlers(socket, number) {
-
-    // 🗑️ Delete for everyone වන මැසේජ් අල්ලගැනීම (Anti-Delete Listener)
-    socket.ev.on('messages.update', async (updates) => {
-        for (const update of updates) {
-            if (update.update && update.update.message && update.update.message.protocolMessage) {
-                const protocolMsg = update.update.message.protocolMessage;
-                
-                if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
-                    const revokedId = protocolMsg.key?.id;
-                    const cachedMsg = messageCache.get(revokedId);
-
-                    if (cachedMsg) {
-                        const chatJid = cachedMsg.key.remoteJid;
-                        const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
-                        const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
-
-                        deletedMessages.set(chatJid, {
-                            sender: senderJid,
-                            text: messageText,
-                            time: new Date().toLocaleTimeString(),
-                            originalMsg: cachedMsg
-                        });
-                    }
-                }
-            }
-        }
-    });
-
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
-
-        // 📥 එන හැම මැසේජ් එකක්ම cache එකට දාගැනීම (if (!body) return එකට උඩින් තැබීමෙන් මීඩියා ද ඩිලීට් වුණොත් අල්ලාගත හැක)
-        if (msg.key && msg.key.id) {
-            messageCache.set(msg.key.id, msg);
-            if (messageCache.size > 300) {
-                const oldestKey = messageCache.keys().next().value;
-                messageCache.delete(oldestKey);
-            }
-        }
 
         const sender = msg.key.remoteJid;
         const body = getMessageBody(msg);
@@ -205,37 +165,7 @@ function setupCommandHandlers(socket, number) {
             return await socket.sendMessage(sender, messagePayload, { quoted: quotedMsg });
         };
 
-        // 3. කමාන්ඩ් එකක් නොවේ නම් මෙතැනින් නවත්වමු
-if (!isCommand) return;
 
-const args = body.slice(prefix.length).trim().split(/ +/);
-const command = args.shift().toLowerCase();
-
-switch (command) {
-    case 'remsg':
-    case 'delete':
-    case 'getdel': {
-        const lastDeleted = deletedMessages.get(sender);
-        if (!lastDeleted) {
-            await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ මචං!', msg);
-            return;
-        }
-
-        const recoverText = `
-🗑️ *DELETED MESSAGE RECOVERED* 🗑️
-
-👤 *Sender:* @${lastDeleted.sender.split('@')[0]}
-⏰ *Time:* ${lastDeleted.time}
-💬 *Message:* ${lastDeleted.text}
-`;
-
-        await reply({
-            text: recoverText.trim(),
-            mentions: [lastDeleted.sender]
-        }, lastDeleted.originalMsg);
-        break;
-    }
-}
         // ==========================================
         // 🤖 AUTO-REPLY LOGIC
         // ==========================================
@@ -296,15 +226,37 @@ switch (command) {
         if (botMode === 'private') return;                 
         if (botMode === 'group' && !isGroup) return;        
         if (botMode === 'inbox' && isGroup) return;        
-   }
+    }
 
-        // කලින් args declare කරලා තියෙන නිසා මෙතන const අයින් කරලා කෙලින්ම assign කරන්න
-        args = body.slice(prefix.length).trim().split(/ +/);
-        const command = args.shift().toLowerCase();
-        const botName = await get('BOT_NAME', number) || 'NIM BOT';
-        
+    const args = body.slice(prefix.length).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+    const botName = await get('BOT_NAME', number) || 'NIM BOT';
+
         try {
             switch (command) {
+                case 'remsg':
+                case 'delete':
+                case 'getdel': {
+                    const lastDeleted = deletedMessages.get(sender);
+                    if (!lastDeleted) {
+                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ මචං!', msg);
+                        return;
+                    }
+
+                    const recoverText = `
+🗑️ *DELETED MESSAGE RECOVERED* 🗑️
+
+👤 *Sender:* @${lastDeleted.sender.split('@')[0]}
+⏰ *Time:* ${lastDeleted.time}
+💬 *Message:* ${lastDeleted.text}
+`;
+
+                    await reply({
+                        text: recoverText.trim(),
+                        mentions: [lastDeleted.sender]
+                    }, lastDeleted.originalMsg);
+                    break;
+                }
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
@@ -363,9 +315,6 @@ switch (command) {
 *╎*
 *╎📍ᴄᴍᴅ - .vv*
 *╎🔖 ᴅᴇꜱᴄ- Download View Once image or video.*
-*╎*
-*╎📍ᴄᴍᴅ - .remsg*
-*╎🔖 ᴅᴇꜱᴄ- Recover deleted message in chat.*
 *╎*
 *╎📍ᴄᴍᴅ - .owner*
 *╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
