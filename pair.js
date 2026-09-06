@@ -483,6 +483,9 @@ id - 842717887
 *╎📍ᴄᴍᴅ - .vv*
 *╎🔖 ᴅᴇꜱᴄ- Download View Once image or video.*
 *╎*
+*╎📍ᴄᴍᴅ - .jid*
+*╎🔖 ᴅᴇꜱᴄ- Channel & Group & Chat JID.*
+*╎*
 *╎📍ᴄᴍᴅ - .owner*
 *╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
 *╰───────────────────────*
