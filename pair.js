@@ -251,7 +251,7 @@ socket.ev.on('messages.update', async (updates) => {
                     await reply('Hi! 👋');
                 }
                 // 2. "Mk" හෝ "මොකද" දැමූ විට
-                else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada')) {
+                else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada karanne')) {
                     await reply('Mokuth Na innwa😊');
 
                 }
@@ -264,6 +264,24 @@ socket.ev.on('messages.update', async (updates) => {
                 else if (textLower.includes('gn') || textLower.includes('ගුඩ් නයිජ්ට්') || textLower.includes('good night')) {
                     await reply('Good Night✨');
                 }  
+
+                // 4.1
+                else if (textLower.includes('by') || textLower.includes('බායි') || textLower.includes('bye')) {
+                    await reply('Bye🍻');
+                }
+
+                // 4.1
+                else if (textLower.includes('r2k ge channel monawada') || textLower.includes('pawarage channel link') || textLower.includes('r2k gaming')) {
+                    await reply(`*🔥 R2K Gaming Channels 🔥*
+
+💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
+
+💓Youtube - https://www.youtube.com/@rush.2.kill__0
+
+💓Fb - https://www.facebook.com/profile.php?id=61581297341821
+
+*\`Thankyou Yaluwe !\`*`);
+                }
 
                 // 5.
                 else if (textLower.includes('payment details') || textLower.includes('පේමන්ට් ඩීටේල්') || textLower.includes('bank details')) {
