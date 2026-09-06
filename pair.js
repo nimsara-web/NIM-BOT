@@ -158,7 +158,7 @@ function setupCommandHandlers(socket, number) {
         if (!body) return;
 
         const prefix = await get('PREFIX', number) || '.';
-                
+        
         // 1. isCommand define කරනවා
         const isCommand = body.startsWith(prefix);
 
@@ -235,7 +235,7 @@ function setupCommandHandlers(socket, number) {
                 }, lastDeleted.originalMsg);
                 break;
             }
-
+        } 
 
         // ==========================================
         // 🤖 AUTO-REPLY LOGIC
