@@ -232,7 +232,7 @@ socket.ev.on('messages.update', async (updates) => {
         };
 
 
-        // ==========================================
+       // ==========================================
         // 🤖 AUTO-REPLY LOGIC
         // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off'; 
@@ -268,7 +268,7 @@ socket.ev.on('messages.update', async (updates) => {
 
                 // 5.
                 else if (textLower.includes('payment details') || textLower.includes('පේමන්ට් ඩීටේල්') || textLower.includes('bank details')) {
-                    await reply('*💰Payment Details*
+                    await reply(`*💰Payment Details*
 
 💡Bank - Commercial Bank
 Account number - 8029210301
@@ -307,15 +307,14 @@ Branch - branch Ampara - 015
 id - 842717887
 
 
-*`Thankyou !`*');
-                }               
+*\`Thankyou !\`*`);
+                }                
                     
                 // 6. "Nimsara" හෝ "නිම්සර" දැමූ විට Text එකයි Audio එකයි යන්න
-                else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත')) {
+                else if (textLower.includes('nethmintha' ) || textLower.includes('නෙත්මින්ත')) {
                     try {
                         const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
                         
-                        // GitHub URL එකෙන් axios හරහා බෆර් එක ඩවුන්ලෝඩ් කරගැනීම
                         const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
                         const audioBuffer = Buffer.from(response.data);
 
@@ -323,7 +322,7 @@ id - 842717887
                             text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
                             audio: audioBuffer,
                             mimetype: 'audio/mp4',
-                            ptt: true // Voice Note එකක් ලෙස යැවීමට
+                            ptt: true 
                         });
                     } catch (err) {
                         console.error('Audio send error:', err);
