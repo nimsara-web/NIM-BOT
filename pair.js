@@ -3,6 +3,7 @@
  * Creator: Nimsara
  * Mode: Full Features Enabled (Status Seen, React, Always Online, Status Saver / Media Downloader & View Once .vv Added)
  */
+require('dotenv').config();
 
 const {
     default: makeWASocket,
