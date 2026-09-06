@@ -254,8 +254,63 @@ socket.ev.on('messages.update', async (updates) => {
                 // 2. "Mk" හෝ "මොකද" දැමූ විට
                 else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada')) {
                     await reply('Mokuth Na innwa😊');
+
                 }
-                // 3. "Nimsara" හෝ "නිම්සර" දැමූ විට Text එකයි Audio එකයි යන්න
+                // 3.
+                else if (textLower.includes('gm') || textLower.includes('ගුඩ් මොර්නින්ග්') || textLower.includes('good morning')) {
+                    await reply('Good Morning🌤️');
+                }
+
+                // 4.
+                else if (textLower.includes('gn') || textLower.includes('ගුඩ් නයිජ්ට්') || textLower.includes('good night')) {
+                    await reply('Good Night✨');
+                }  
+
+                // 5.
+                else if (textLower.includes('payment details') || textLower.includes('පේමන්ට් ඩීටේල්') || textLower.includes('bank details')) {
+                    await reply('*💰Payment Details*
+
+💡Bank - Commercial Bank
+Account number - 8029210301
+Name - G.M.Nethmintha Nimsara Jayasooriya
+Branch - Ampara
+
+💡Bank - Lolc Bank
+Account number - 03210014631
+Name - G.M.Nethmintha Nimsara
+Branch - Ampara1
+
+💡Bank - NSB
+Account number - 109090193739
+Name - G.M.N.N.JAYASURIYA
+Branch - Ampara 2nd
+
+💡Bank - Dialog Finance PLC
+Account number -  001021434294
+Name - Gardiya Manawaduge Nethmintha Nimsara Jayasooriya
+Branch - Head Office
+
+💡Bank - Peoples Bank
+Account number - 015200130082418
+Name - Nethmintha nimsara
+Branch - branch Ampara - 015
+
+
+*🪄EZ CASH*
+
+0740532742
+
+*Ez Cash දාද්දි වැඩියෙන් rs.20 දාන්න*
+
+*🪙 BINANCE*
+
+id - 842717887
+
+
+*`Thankyou !`*');
+                }               
+                    
+                // 6. "Nimsara" හෝ "නිම්සර" දැමූ විට Text එකයි Audio එකයි යන්න
                 else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත')) {
                     try {
                         const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
