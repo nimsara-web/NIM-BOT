@@ -123,34 +123,47 @@ function getMessageBody(msg) {
 
 function setupCommandHandlers(socket, number) {
     
-    // 1. මැසේජ් එකක් ඩිලීට් වුණාම (Revoke) අල්ලගන්න listener එක මෙතනින් දාන්න
-    socket.ev.on('messages.update', async (updates) => {
-        for (const { key, update } of updates) {
-            const messageContent = update?.message || update;
+   // මැසේජ් ඩිලීට් වුණාම (Revoke) අල්ලගන්න වඩාත් ශක්තිමත් listener එක
+socket.ev.on('messages.update', async (updates) => {
+    for (const { key, update } of updates) {
+        // ඩීබග් කරගැනීමට ලොග් එකක් (Render logs වල බලාගත හැක)
+        if (update) {
+            console.log("[UPDATE EVENT]", JSON.stringify(update));
+        }
+
+        const protocolMsg = update?.protocolMessage || update?.message?.protocolMessage;
+        
+        if (protocolMsg) {
+            console.log("[ANTI-DELETE] Protocol message detected, type:", protocolMsg.type);
             
-            if (messageContent && messageContent.protocolMessage) {
-                const protocolMsg = messageContent.protocolMessage;
+            // Baileys වල 0 යනු REVOKE (Delete for everyone) වේ
+            if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key || protocolMsg.stanzaId) {
+                const revokedId = protocolMsg.key?.id || protocolMsg.stanzaId;
                 
-                if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
-                    const revokedId = protocolMsg.key?.id || key?.id;
-                    const cachedMsg = messageCache.get(revokedId);
+                if (!revokedId) continue;
 
-                    if (cachedMsg) {
-                        const chatJid = cachedMsg.key.remoteJid;
-                        const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
-                        const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
+                const cachedMsg = messageCache.get(revokedId);
 
-                        deletedMessages.set(chatJid, {
-                            sender: senderJid,
-                            text: messageText,
-                            time: new Date().toLocaleTimeString(),
-                            originalMsg: cachedMsg
-                        });
-                    }
+                if (cachedMsg) {
+                    const chatJid = cachedMsg.key.remoteJid;
+                    const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
+                    const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
+
+                    deletedMessages.set(chatJid, {
+                        sender: senderJid,
+                        text: messageText,
+                        time: new Date().toLocaleTimeString(),
+                        originalMsg: cachedMsg
+                    });
+                    
+                    console.log(`[ANTI-DELETE SUCCESS] Captured deleted message from: ${senderJid}`);
+                } else {
+                    console.log(`[ANTI-DELETE WARNING] Message ID not found in cache: ${revokedId}`);
                 }
             }
         }
-    });
+    }
+});
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
