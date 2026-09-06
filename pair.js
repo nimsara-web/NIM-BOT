@@ -206,22 +206,22 @@ function setupCommandHandlers(socket, number) {
         };
 
         // 3. කමාන්ඩ් එකක් නොවේ නම් මෙතැනින් නවත්වමු
-        if (!isCommand) return;
+if (!isCommand) return;
 
-        const args = body.slice(prefix.length).trim().split(/ +/);
-        const command = args.shift().toLowerCase();
+const args = body.slice(prefix.length).trim().split(/ +/);
+const command = args.shift().toLowerCase();
 
-        switch (command) {
-            case 'remsg':
-            case 'delete':
-            case 'getdel': {
-                const lastDeleted = deletedMessages.get(sender);
-                if (!lastDeleted) {
-                    await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ මචං!', msg);
-                    return;
-                }
+switch (command) {
+    case 'remsg':
+    case 'delete':
+    case 'getdel': {
+        const lastDeleted = deletedMessages.get(sender);
+        if (!lastDeleted) {
+            await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ මචං!', msg);
+            return;
+        }
 
-                const recoverText = `
+        const recoverText = `
 🗑️ *DELETED MESSAGE RECOVERED* 🗑️
 
 👤 *Sender:* @${lastDeleted.sender.split('@')[0]}
@@ -229,14 +229,13 @@ function setupCommandHandlers(socket, number) {
 💬 *Message:* ${lastDeleted.text}
 `;
 
-                await reply({
-                    text: recoverText.trim(),
-                    mentions: [lastDeleted.sender]
-                }, lastDeleted.originalMsg);
-                break;
-            }
-        } 
-
+        await reply({
+            text: recoverText.trim(),
+            mentions: [lastDeleted.sender]
+        }, lastDeleted.originalMsg);
+        break;
+    }
+}
         // ==========================================
         // 🤖 AUTO-REPLY LOGIC
         // ==========================================
