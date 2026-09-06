@@ -38,6 +38,19 @@ const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r'
 // Global tracking maps
 const socketCreationTime = new Map();
 const activeSockets = new Map();
+const messageCache = new Map();     
+const deletedMessages = new Map();  
+
+// Helper to get message text safely
+function getMessageBody(msg) {
+    if (!msg.message) return '';
+    const type = Object.keys(msg.message)[0];
+    if (type === 'conversation') return msg.message.conversation;
+    if (type === 'extendedTextMessage') return msg.message.extendedTextMessage?.text;
+    if (type === 'imageMessage') return msg.message.imageMessage?.caption;
+    if (type === 'videoMessage') return msg.message.videoMessage?.caption;
+    return '';
+}
 
 // Helper to download audio as a Buffer to ensure 100% playback success
 async function getAudioBuffer(url) {
@@ -109,8 +122,49 @@ function getMessageBody(msg) {
 } // 👈 මෙන්න මෙතන getMessageBody ෆන්ක්ෂන් එක වැහුණා!
 
 function setupCommandHandlers(socket, number) {
+    
+    // 1. මැසේජ් එකක් ඩිලීට් වුණාම (Revoke) අල්ලගන්න listener එක මෙතනින් දාන්න
+    socket.ev.on('messages.update', async (updates) => {
+        for (const { key, update } of updates) {
+            const messageContent = update?.message || update;
+            
+            if (messageContent && messageContent.protocolMessage) {
+                const protocolMsg = messageContent.protocolMessage;
+                
+                if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
+                    const revokedId = protocolMsg.key?.id || key?.id;
+                    const cachedMsg = messageCache.get(revokedId);
+
+                    if (cachedMsg) {
+                        const chatJid = cachedMsg.key.remoteJid;
+                        const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
+                        const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
+
+                        deletedMessages.set(chatJid, {
+                            sender: senderJid,
+                            text: messageText,
+                            time: new Date().toLocaleTimeString(),
+                            originalMsg: cachedMsg
+                        });
+                    }
+                }
+            }
+        }
+    });
+
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
+        if (!msg) return;
+
+        // මැසේජ් එකක් එනකොටම anti-delete එක සඳහා කෑෂ් කරගැනීම
+        if (msg.key && msg.key.id) {
+            messageCache.set(msg.key.id, msg);
+            if (messageCache.size > 500) {
+                const oldestKey = messageCache.keys().next().value;
+                messageCache.delete(oldestKey);
+            }
+        }
+
         if (!msg.message) return;
 
         const sender = msg.key.remoteJid;
@@ -131,7 +185,6 @@ function setupCommandHandlers(socket, number) {
         else if (global.autoReadStatus === 'cmd' && isCommand) {
             await socket.readMessages([msg.key]); 
         }
-
         // ==========================================
         // 🔗 UNIVERSAL CHANNEL FORWARDING & REPLY HELPER
         // ==========================================
