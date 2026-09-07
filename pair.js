@@ -17,6 +17,8 @@ const yts = require('yt-search');
 const nexray = require('api-nexray');
 const ytdl = require('@distube/ytdl-core');
 const axios = require('axios');
+const YouTubeDlWrap = require('yt-dlp-wrap'); 
+const ytDlp = new YouTubeDlWrap();             
 const pino = require('pino');
 const fs = require('fs-extra');
 const path = require('path');
@@ -635,24 +637,24 @@ case 'url': {
 
         await reply(`⏳ Uploading media, please wait... 🚀`);
 
-        // Media buffer එක ඩවුන්ලෝඩ් කරගැනීම
         const mediaTarget = quoted ? { message: quoted } : msg;
         const buffer = await downloadMediaMessage(mediaTarget, 'buffer', {}, { logger: pino({ level: 'silent' }) });
 
         const FormData = require('form-data');
         const form = new FormData();
+        form.append('reqtype', 'fileupload');
         const ext = mime.split('/')[1] || 'jpg';
-        form.append('file', buffer, { filename: `media.${ext}`, contentType: mime });
+        form.append('fileToUpload', buffer, { filename: `media.${ext}`, contentType: mime });
 
-        // Telegraph free image/video hosting API එක හරහා අප්ලෝඩ් කිරීම
-        const uploadRes = await axios.post('https://telegra.ph/upload', form, {
+        // Catbox.moe free hosting API (Supports up to 200MB, no 400 errors)
+        const uploadRes = await axios.post('https://catbox.moe/user/api.php', form, {
             headers: {
                 ...form.getHeaders()
             }
         });
 
-        if (uploadRes.data && uploadRes.data[0] && uploadRes.data[0].src) {
-            const mediaUrl = 'https://telegra.ph' + uploadRes.data[0].src;
+        if (uploadRes.data && uploadRes.data.startsWith('http')) {
+            const mediaUrl = uploadRes.data.trim();
             
             const responseText = `
 🔗 *MEDIA URL GENERATED* 🔗
@@ -672,7 +674,6 @@ case 'url': {
     }
     break;
 }
-
                     
 
 
@@ -755,8 +756,8 @@ case 'url': {
 
                     
 
-   // ==========================================
-// 📥 DOWNLOAD COMMANDS (Song, TikTok, YouTube, Facebook)
+// ==========================================
+// 📥 DOWNLOAD COMMANDS (Using yt-dlp-wrap - 100% Working & Stable)
 // ==========================================
 
 // CASE: SONG
@@ -770,17 +771,15 @@ case 'song': {
         const video = search.videos[0];
         if (!video) return reply(`❌ Song not found! Try another name.`);
 
-        await reply(`🎵 Found: *${video.title}*\n📥 Downloading audio, please wait...`);
+        await reply(`🎵 Found: *${video.title}*\n📥 Generating audio link, please wait...`);
 
-        const apiRes = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp3?url=${encodeURIComponent(video.url)}`);
-        const resData = apiRes.data;
-        
-        if (!resData) {
-            return reply(`❌ Download failed from API. Try again later.`);
-        }
-
-        const resultObj = resData.result || resData;
-        const audioUrl = resultObj.download?.url || resultObj.url || resultObj.audio || resultObj.dl_url;
+        // yt-dlp හරහා direct audio link එක ලබා ගැනීම
+        const audioUrlOutput = await ytDlp.exec([
+            '--get-url',
+            '-f', 'bestaudio',
+            video.url
+        ]);
+        const audioUrl = audioUrlOutput.trim().split('\n')[0];
 
         if (!audioUrl) {
             return reply(`❌ Audio link එක ලබාගන්න බැරි වුණා මචං.`);
@@ -817,26 +816,23 @@ case 'tiktok': {
         return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
     }
 
-    await reply(`📥 Downloading TikTok video... Please wait ⏳`);
+    await reply(`📥 Processing TikTok video... Please wait ⏳`);
     try {
-        const response = await axios.get(`https://api.nexray.eu.cc/downloader/tiktok?url=${encodeURIComponent(url)}`);
-        const resData = response.data;
+        const videoUrlOutput = await ytDlp.exec([
+            '--get-url',
+            url
+        ]);
+        const videoUrl = videoUrlOutput.trim().split('\n')[0];
+        
+        if (!videoUrl) return reply(`❌ TikTok වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා මචං.`);
 
-        if (resData) {
-            const resultObj = resData.result || resData;
-            const videoUrl = resultObj.no_watermark || resultObj.nowm || resultObj.video || resultObj.data?.no_watermark || resultObj.dl_url;
-            
-            if (!videoUrl) return reply(`❌ TikTok වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා මචං.`);
+        const caption = `🎬 *TikTok Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
 
-            const caption = `🎬 *TikTok Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
+        await socket.sendMessage(sender, {
+            video: { url: videoUrl },
+            caption: caption
+        }, { quoted: msg });
 
-            await socket.sendMessage(sender, {
-                video: { url: videoUrl },
-                caption: caption
-            }, { quoted: msg });
-        } else {
-            await reply(`❌ Failed to fetch TikTok video. Invalid link or API error.`);
-        }
     } catch (e) {
         console.error("TikTok download error:", e);
         await reply(`❌ Error downloading TikTok video: ${e.message}`);
@@ -858,14 +854,13 @@ case 'youtube': {
         await reply(`📥 Processing YouTube download... Please wait ⏳`);
         
         if (type === 'audio') {
-            const apiRes = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp3?url=${encodeURIComponent(url)}`);
-            const resData = apiRes.data;
-            if (!resData) return reply(`❌ Failed to fetch audio.`);
-            
-            const resultObj = resData.result || resData;
-            const audioUrl = resultObj.download?.url || resultObj.url || resultObj.audio || resultObj.dl_url;
-
-            if (!audioUrl) return reply(`❌ YouTube audio link එක හොයාගන්න බැරි වුණා.`);
+            const audioUrlOutput = await ytDlp.exec([
+                '--get-url',
+                '-f', 'bestaudio',
+                url
+            ]);
+            const audioUrl = audioUrlOutput.trim().split('\n')[0];
+            if (!audioUrl) return reply(`❌ Failed to fetch YouTube audio.`);
 
             await socket.sendMessage(sender, {
                 audio: { url: audioUrl },
@@ -874,14 +869,13 @@ case 'youtube': {
             }, { quoted: msg });
 
         } else {
-            const apiRes = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp4?url=${encodeURIComponent(url)}`);
-            const resData = apiRes.data;
-            if (!resData) return reply(`❌ Failed to fetch video.`);
-            
-            const resultObj = resData.result || resData;
-            const videoUrl = resultObj.download?.url || resultObj.url || resultObj.video || resultObj.dl_url;
-
-            if (!videoUrl) return reply(`❌ YouTube video link එක හොයාගන්න බැරි වුණා.`);
+            const videoUrlOutput = await ytDlp.exec([
+                '--get-url',
+                '-f', 'best[ext=mp4]/best',
+                url
+            ]);
+            const videoUrl = videoUrlOutput.trim().split('\n')[0];
+            if (!videoUrl) return reply(`❌ Failed to fetch YouTube video.`);
 
             await socket.sendMessage(sender, {
                 video: { url: videoUrl },
@@ -895,7 +889,7 @@ case 'youtube': {
     break;
 }
 
-// CASE: FACEBOOK (New Added)
+// CASE: FACEBOOK
 case 'fb':
 case 'facebook': {
     const url = args[0];
@@ -903,29 +897,25 @@ case 'facebook': {
         return reply(`⚠️ Please provide a valid Facebook video link!\nExample: .fb https://www.facebook.com/share/v/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
     }
 
-    await reply(`📥 Downloading Facebook video... Please wait ⏳`);
+    await reply(`📥 Processing Facebook video... Please wait ⏳`);
     try {
-        // Free reliable Facebook downloader endpoint
-        const apiRes = await axios.get(`https://bk9.fun/downloader/fb?url=${encodeURIComponent(url)}`);
-        const resData = apiRes.data;
+        const videoUrlOutput = await ytDlp.exec([
+            '--get-url',
+            url
+        ]);
+        const videoUrl = videoUrlOutput.trim().split('\n')[0];
 
-        if (resData && resData.status) {
-            const resultObj = resData.result || resData;
-            const videoUrl = resultObj.HD || resultObj.SD || resultObj.url || resultObj.dl_url;
-
-            if (!videoUrl) {
-                return reply(`❌ Facebook වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා මචං.`);
-            }
-
-            const caption = `🎬 *Facebook Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
-
-            await socket.sendMessage(sender, {
-                video: { url: videoUrl },
-                caption: caption
-            }, { quoted: msg });
-        } else {
-            await reply(`❌ Failed to fetch Facebook video. Please check the link.`);
+        if (!videoUrl) {
+            return reply(`❌ Facebook වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා මචං.`);
         }
+
+        const caption = `🎬 *Facebook Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
+
+        await socket.sendMessage(sender, {
+            video: { url: videoUrl },
+            caption: caption
+        }, { quoted: msg });
+
     } catch (e) {
         console.error("Facebook download error:", e);
         await reply(`❌ Error downloading Facebook video: ${e.message}`);
