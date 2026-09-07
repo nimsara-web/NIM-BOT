@@ -762,7 +762,7 @@ case 'url': {
                     
 
 // ==========================================
-// 📥 DOWNLOAD COMMANDS (Using yt-dlp-wrap - 100% Working & Stable)
+// 📥 DOWNLOAD COMMANDS (Fixed with execPromise)
 // ==========================================
 
 // CASE: SONG
@@ -778,8 +778,8 @@ case 'song': {
 
         await reply(`🎵 Found: *${video.title}*\n📥 Generating audio link, please wait...`);
 
-        // yt-dlp හරහා direct audio link එක ලබා ගැනීම
-        const audioUrlOutput = await ytDlp.exec([
+        // exec වෙනුවට execPromise පාවිච්චි කිරීම
+        const audioUrlOutput = await ytDlp.execPromise([
             '--get-url',
             '-f', 'bestaudio',
             video.url
@@ -823,7 +823,7 @@ case 'tiktok': {
 
     await reply(`📥 Processing TikTok video... Please wait ⏳`);
     try {
-        const videoUrlOutput = await ytDlp.exec([
+        const videoUrlOutput = await ytDlp.execPromise([
             '--get-url',
             url
         ]);
@@ -859,7 +859,7 @@ case 'youtube': {
         await reply(`📥 Processing YouTube download... Please wait ⏳`);
         
         if (type === 'audio') {
-            const audioUrlOutput = await ytDlp.exec([
+            const audioUrlOutput = await ytDlp.execPromise([
                 '--get-url',
                 '-f', 'bestaudio',
                 url
@@ -874,7 +874,7 @@ case 'youtube': {
             }, { quoted: msg });
 
         } else {
-            const videoUrlOutput = await ytDlp.exec([
+            const videoUrlOutput = await ytDlp.execPromise([
                 '--get-url',
                 '-f', 'best[ext=mp4]/best',
                 url
@@ -904,7 +904,7 @@ case 'facebook': {
 
     await reply(`📥 Processing Facebook video... Please wait ⏳`);
     try {
-        const videoUrlOutput = await ytDlp.exec([
+        const videoUrlOutput = await ytDlp.execPromise([
             '--get-url',
             url
         ]);
