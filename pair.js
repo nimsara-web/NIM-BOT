@@ -232,47 +232,62 @@ socket.ev.on('messages.update', async (updates) => {
 
 
        // ==========================================
-        // 🤖 AUTO-REPLY LOGIC
-        // ==========================================
-        global.autoReplyMode = global.autoReplyMode || 'off'; 
+// 🤖 AUTO-REPLY LOGIC
+// ==========================================
+global.autoReplyMode = global.autoReplyMode || 'off'; 
 
-        if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
-            const isGroup = sender.endsWith('@g.us');
-            const shouldAutoReply = 
-                (global.autoReplyMode === 'all') ||
-                (global.autoReplyMode === 'inbox' && !isGroup) ||
-                (global.autoReplyMode === 'group' && isGroup);
+if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
+    const isGroup = sender.endsWith('@g.us');
+    const shouldAutoReply = 
+        (global.autoReplyMode === 'all') ||
+        (global.autoReplyMode === 'inbox' && !isGroup) ||
+        (global.autoReplyMode === 'group' && isGroup);
 
-            if (shouldAutoReply) {
-                const textLower = body.toLowerCase().trim();
+    if (shouldAutoReply) {
+        const textLower = body.toLowerCase().trim();
 
-                // 1. "Hi" හෝ "හායි" හෝ "Hello" දැමූ විට
-                if (textLower.includes('hi') || textLower.includes('හායි') || textLower.includes('hello')) {
-                    await reply('Hi! 👋');
-                }
-                // 2. "Mk" හෝ "මොකද" දැමූ විට
-                else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada karanne')) {
-                    await reply('Mokuth Na innwa😊');
+        // 👇  (Anti-Loop Protection)
+        const isBotSelfReply = 
+            textLower.includes('hi! 👋') || 
+            textLower.includes('mokuth na innwa') || 
+            textLower.includes('good morning🌤️') || 
+            textLower.includes('good night✨') || 
+            textLower.includes('bye🍻') || 
+            textLower.includes('r2k gaming channels') || 
+            textLower.includes('payment details') || 
+            textLower.includes('eyaa hadapu bot');
 
-                }
-                // 3.
-                else if (textLower.includes('gm') || textLower.includes('ගුඩ් මොර්නින්ග්') || textLower.includes('good morning')) {
-                    await reply('Good Morning🌤️');
-                }
+        if (isBotSelfReply) {
+            return; // වෙනත් බොට් කෙනෙක් හෝ අපේ බෝට් කෙනෙක් යැවූ රිප්ලයි එකක් නම් තවදුරටත් රිප්ලයි නොකර නවතියි
+        }
 
-                // 4.
-                else if (textLower.includes('gn') || textLower.includes('ගුඩ් නයිජ්ට්') || textLower.includes('good night')) {
-                    await reply('Good Night✨');
-                }  
+        // 1. "Hi" හෝ "හායි" හෝ "Hello" දැමූ විට
+        if (textLower.includes('hi') || textLower.includes('හායි') || textLower.includes('hello')) {
+            await reply('Hi! 👋');
+        }
+        // 2. "Mk" හෝ "මොකද" දැමූ විට
+        else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada karanne')) {
+            await reply('Mokuth Na innwa😊');
 
-                // 4.1
-                else if (textLower.includes('by') || textLower.includes('බායි') || textLower.includes('bye')) {
-                    await reply('Bye🍻');
-                }
+        }
+        // 3.
+        else if (textLower.includes('gm') || textLower.includes('ගුඩ් මොර්නින්ග්') || textLower.includes('good morning')) {
+            await reply('Good Morning🌤️');
+        }
 
-                // 4.1
-                else if (textLower.includes('r2k ge channel monawada') || textLower.includes('pawarage channel link') || textLower.includes('r2k gaming')) {
-                    await reply(`*🔥 R2K Gaming Channels 🔥*
+        // 4.
+        else if (textLower.includes('gn') || textLower.includes('ගුඩ් නයිජ්ට්') || textLower.includes('good night')) {
+            await reply('Good Night✨');
+        }  
+
+        // 4.1
+        else if (textLower.includes('by') || textLower.includes('බායි') || textLower.includes('bye')) {
+            await reply('Bye🍻');
+        }
+
+        // 4.1
+        else if (textLower.includes('r2k ge channel monawada') || textLower.includes('pawarage channel link') || textLower.includes('r2k gaming')) {
+            await reply(`*🔥 R2K Gaming Channels 🔥*
 
 💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
 
@@ -281,11 +296,11 @@ socket.ev.on('messages.update', async (updates) => {
 💓Fb - https://www.facebook.com/profile.php?id=61581297341821
 
 *\`Thankyou Yaluwe !\`*`);
-                }
+        }
 
-                // 5.
-                else if (textLower.includes('payment details') || textLower.includes('පේමන්ට් ඩීටේල්') || textLower.includes('bank details')) {
-                    await reply(`*💰Payment Details*
+        // 5.
+        else if (textLower.includes('payment details') || textLower.includes('පේමන්ට් ඩීටේල්') || textLower.includes('bank details')) {
+            await reply(`*💰Payment Details*
 
 💡Bank - Commercial Bank
 Account number - 8029210301
@@ -325,30 +340,30 @@ id - 842717887
 
 
 *\`Thankyou !\`*`);
-                }                
-                    
-                // 6. "Nimsara" හෝ "නිම්සර" දැමූ විට Text එකයි Audio එකයි යන්න
-                else if (textLower.includes('nethmintha' ) || textLower.includes('නෙත්මින්ත')) {
-                    try {
-                        const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
-                        
-                        const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
-                        const audioBuffer = Buffer.from(response.data);
+        }                
+            
+        // 6. "Nimsara" හෝ "නිම්සර" දැමූ විට Text එකයි Audio එකයි යන්න
+        else if (textLower.includes('nethmintha' ) || textLower.includes('නෙත්මින්ත')) {
+            try {
+                const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
+                
+                const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
+                const audioBuffer = Buffer.from(response.data);
 
-                        await reply({ 
-                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
-                            audio: audioBuffer,
-                            mimetype: 'audio/mp4',
-                            ptt: true 
-                        });
-                    } catch (err) {
-                        console.error('Audio send error:', err);
-                        await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎');
-                    }
-                }
+                await reply({ 
+                    text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎',
+                    audio: audioBuffer,
+                    mimetype: 'audio/mp4',
+                    ptt: true 
+                });
+            } catch (err) {
+                console.error('Audio send error:', err);
+                await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎');
             }
         }
-        // ==========================================
+    }
+}
+// ==========================================
 
 
         // 3. Prefix නැති ඒවා මෙතනින් නවත්තනවා
@@ -440,7 +455,7 @@ id - 842717887
                     break;
                 }
 
-                    // 👇 AI CHATBOT
+                    // 👇 AI CHATBOT (Without API Key - Free Public API)
     case 'ai':
     case 'gpt': {
         const query = args.join(' ');
@@ -448,16 +463,11 @@ id - 842717887
         
         await reply(`🤖 Thinking... please wait... 🧠`);
         try {
-            const apiKey = process.env.GEMINI_API_KEY; // 
-            if (!apiKey) return reply(`❌ Gemini API Key is not set in environment variables!`);
-            
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+            // කිසිදු API Key එකක් අවශ්‍ය නොවන නිදහස් Public AI API එකක්
+            const apiUrl = `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`;
+            const apiRes = await axios.get(apiUrl);
 
-            const apiRes = await axios.post(apiUrl, {
-                contents: [{ parts: [{ text: query }] }]
-            });
-
-            const aiAnswer = apiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            const aiAnswer = apiRes.data?.result || apiRes.data?.gpt;
 
             if (!aiAnswer) {
                 return reply(`❌ AI එකෙන් උත්තරයක් ලබාගන්න බැරි වුණා මචං. ටික වේලාවකින් නැවත උත්සාහ කරන්න.`);
@@ -612,6 +622,60 @@ ${aiAnswer.trim()}
 
 
 
+                    // CASE: TOURL / URL (Image/Video to Link Converter)
+case 'tourl':
+case 'url': {
+    try {
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || msg.quoted;
+        const mime = (msg.message?.imageMessage?.mimetype || msg.message?.videoMessage?.mimetype || quoted?.imageMessage?.mimetype || quoted?.videoMessage?.mimetype || '');
+        
+        if (!mime || (!mime.includes('image') && !mime.includes('video'))) {
+            return reply(`⚠️ Please send or reply to an image or video with .tourl\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+        }
+
+        await reply(`⏳ Uploading media, please wait... 🚀`);
+
+        // Media buffer එක ඩවුන්ලෝඩ් කරගැනීම
+        const mediaTarget = quoted ? { message: quoted } : msg;
+        const buffer = await downloadMediaMessage(mediaTarget, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+
+        const FormData = require('form-data');
+        const form = new FormData();
+        const ext = mime.split('/')[1] || 'jpg';
+        form.append('file', buffer, { filename: `media.${ext}`, contentType: mime });
+
+        // Telegraph free image/video hosting API එක හරහා අප්ලෝඩ් කිරීම
+        const uploadRes = await axios.post('https://telegra.ph/upload', form, {
+            headers: {
+                ...form.getHeaders()
+            }
+        });
+
+        if (uploadRes.data && uploadRes.data[0] && uploadRes.data[0].src) {
+            const mediaUrl = 'https://telegra.ph' + uploadRes.data[0].src;
+            
+            const responseText = `
+🔗 *MEDIA URL GENERATED* 🔗
+
+*Direct Link:* ${mediaUrl}
+
+🔗 *Channel:* ${BOT_CHANNEL_LINK}
+`;
+            await reply(responseText.trim(), msg);
+        } else {
+            return reply(`❌ Upload failed. Please try again later.`);
+        }
+
+    } catch (e) {
+        console.error("ToUrl error:", e);
+        await reply(`❌ Error generating URL: ${e.message}`);
+    }
+    break;
+}
+
+                    
+
+
 // --- BOT MODE RESTRICTION CHECK ---
                 const isGroup = from.endsWith('@g.us');
                 const cleanSender = sender.split(':')[0];
@@ -691,7 +755,11 @@ ${aiAnswer.trim()}
 
                     
 
-   // CASE: SONG
+   // ==========================================
+// 📥 DOWNLOAD COMMANDS (Song, TikTok, YouTube, Facebook)
+// ==========================================
+
+// CASE: SONG
 case 'song': {
     const query = args.join(' ');
     if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
@@ -704,7 +772,6 @@ case 'song': {
 
         await reply(`🎵 Found: *${video.title}*\n📥 Downloading audio, please wait...`);
 
-        // Direct Axios request (Bypassing api-nexray package bug)
         const apiRes = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp3?url=${encodeURIComponent(video.url)}`);
         const resData = apiRes.data;
         
@@ -713,7 +780,11 @@ case 'song': {
         }
 
         const resultObj = resData.result || resData;
-        const audioUrl = resultObj.download?.url || resultObj.url || resultObj.audio;
+        const audioUrl = resultObj.download?.url || resultObj.url || resultObj.audio || resultObj.dl_url;
+
+        if (!audioUrl) {
+            return reply(`❌ Audio link එක ලබාගන්න බැරි වුණා මචං.`);
+        }
 
         await socket.sendMessage(sender, {
             audio: { url: audioUrl },
@@ -748,13 +819,15 @@ case 'tiktok': {
 
     await reply(`📥 Downloading TikTok video... Please wait ⏳`);
     try {
-        // Direct Axios request (Bypassing api-nexray package bug)
         const response = await axios.get(`https://api.nexray.eu.cc/downloader/tiktok?url=${encodeURIComponent(url)}`);
         const resData = response.data;
 
         if (resData) {
             const resultObj = resData.result || resData;
             const videoUrl = resultObj.no_watermark || resultObj.nowm || resultObj.video || resultObj.data?.no_watermark || resultObj.dl_url;
+            
+            if (!videoUrl) return reply(`❌ TikTok වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා මචං.`);
+
             const caption = `🎬 *TikTok Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
 
             await socket.sendMessage(sender, {
@@ -790,7 +863,9 @@ case 'youtube': {
             if (!resData) return reply(`❌ Failed to fetch audio.`);
             
             const resultObj = resData.result || resData;
-            const audioUrl = resultObj.download?.url || resultObj.url || resultObj.audio;
+            const audioUrl = resultObj.download?.url || resultObj.url || resultObj.audio || resultObj.dl_url;
+
+            if (!audioUrl) return reply(`❌ YouTube audio link එක හොයාගන්න බැරි වුණා.`);
 
             await socket.sendMessage(sender, {
                 audio: { url: audioUrl },
@@ -804,7 +879,9 @@ case 'youtube': {
             if (!resData) return reply(`❌ Failed to fetch video.`);
             
             const resultObj = resData.result || resData;
-            const videoUrl = resultObj.download?.url || resultObj.url || resultObj.video;
+            const videoUrl = resultObj.download?.url || resultObj.url || resultObj.video || resultObj.dl_url;
+
+            if (!videoUrl) return reply(`❌ YouTube video link එක හොයාගන්න බැරි වුණා.`);
 
             await socket.sendMessage(sender, {
                 video: { url: videoUrl },
@@ -814,6 +891,44 @@ case 'youtube': {
     } catch (e) {
         console.error("YouTube download error:", e);
         await reply(`❌ Failed to download YouTube media: ${e.message}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+    }
+    break;
+}
+
+// CASE: FACEBOOK (New Added)
+case 'fb':
+case 'facebook': {
+    const url = args[0];
+    if (!url || (!url.includes('facebook.com') && !url.includes('fb.watch') && !url.includes('fb.me'))) {
+        return reply(`⚠️ Please provide a valid Facebook video link!\nExample: .fb https://www.facebook.com/share/v/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+    }
+
+    await reply(`📥 Downloading Facebook video... Please wait ⏳`);
+    try {
+        // Free reliable Facebook downloader endpoint
+        const apiRes = await axios.get(`https://bk9.fun/downloader/fb?url=${encodeURIComponent(url)}`);
+        const resData = apiRes.data;
+
+        if (resData && resData.status) {
+            const resultObj = resData.result || resData;
+            const videoUrl = resultObj.HD || resultObj.SD || resultObj.url || resultObj.dl_url;
+
+            if (!videoUrl) {
+                return reply(`❌ Facebook වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා මචං.`);
+            }
+
+            const caption = `🎬 *Facebook Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
+
+            await socket.sendMessage(sender, {
+                video: { url: videoUrl },
+                caption: caption
+            }, { quoted: msg });
+        } else {
+            await reply(`❌ Failed to fetch Facebook video. Please check the link.`);
+        }
+    } catch (e) {
+        console.error("Facebook download error:", e);
+        await reply(`❌ Error downloading Facebook video: ${e.message}`);
     }
     break;
 }
