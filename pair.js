@@ -17,14 +17,19 @@ const yts = require('yt-search');
 const nexray = require('api-nexray');
 const ytdl = require('@distube/ytdl-core');
 const axios = require('axios');
-const YouTubeDlWrap = require('yt-dlp-wrap'); 
-const ytDlp = new YouTubeDlWrap();             
+
+// yt-dlp-wrap constructor error එක නොඑන්න ආරක්ෂිතව require කරගැනීම
+const YouTubeDlWrapModule = require('yt-dlp-wrap');
+const YouTubeDlWrap = YouTubeDlWrapModule.default || YouTubeDlWrapModule;
+const ytDlp = new YouTubeDlWrap();              
+
 const pino = require('pino');
 const fs = require('fs-extra');
 const path = require('path');
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+
 
 let botMode = 'public'; // Default mode eka
 
