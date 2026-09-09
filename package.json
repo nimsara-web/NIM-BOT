@@ -4,21 +4,30 @@
   "description": "WhatsApp Multi-Device Bot created by Nimsara",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "build": "npm install && apt-get update && apt-get install -y python3 python3-pip ffmpeg && pip3 install yt-dlp",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
-    "@distube/ytdl-core": "latest",
-    "baileys": "github:itsliaaa/baileys",
+    "@distube/ytdl-core": "^4.13.5",
     "api-nexray": "^1.0.3",
-    "axios": "^1.6.8",
+    "axios": "^1.7.2",
+    "baileys": "github:itsliaaa/baileys",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "form-data": "^4.0.0",
     "fs-extra": "^11.2.0",
-    "mongoose": "^8.3.1",
+    "mongoose": "^8.4.0",
     "pino": "^8.20.0",
-    "yt-search": "^2.10.4",
-    "yt-dlp-wrap": "latest"
-  }
+    "yt-search": "^2.10.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Nimsara",
+  "license": "MIT"
 }
