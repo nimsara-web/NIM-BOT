@@ -537,15 +537,15 @@ Example: \`1\` for Download Commands
 
                 if (hasKeyword('hi') || hasKeyword('හායි') || hasKeyword('hello')) {
                     await reply('Hi! 👋');
-                } else if (hasKeyword('mk') || hasKeyword('මොකද') || textLower.includes('mokada karanne')) {
+                } else if (hasKeyword('mk') || hasKeyword('මොකද කරන්නෙ') || textLower.includes('mokada karanne')) {
                     await reply('Mokuth Na innwa😊');
-                } else if (hasKeyword('gm') || hasKeyword('ගුඩ්') || textLower.includes('good morning')) {
+                } else if (hasKeyword('gm') || hasKeyword('ගුඩ් මොර්නින්ග්') || textLower.includes('good morning')) {
                     await reply('Good Morning🌤️');
-                } else if (hasKeyword('gn') || hasKeyword('නයිජ්ට්') || textLower.includes('good night')) {
+                } else if (hasKeyword('gn') || hasKeyword('ගුඩ් නයිට්') || textLower.includes('good night')) {
                     await reply('Good Night✨');
                 } else if (hasKeyword('by') || hasKeyword('බායි') || hasKeyword('bye')) {
                     await reply('Bye🍻');
-                } else if (textLower.includes('r2k') || textLower.includes('gaming')) {
+                } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
                     await reply(`*🔥 R2K Gaming Channels 🔥*
 
 💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
@@ -553,17 +553,47 @@ Example: \`1\` for Download Commands
 💓Fb - https://www.facebook.com/profile.php?id=61581297341821
 
 *\`Thankyou Yaluwe !\`*`);
-                } else if (textLower.includes('payment') || textLower.includes('bank') || textLower.includes('ez cash')) {
-                    await reply(`*💰Payment Details*
+                } else if (textLower.includes('payment') || textLower.includes('payment details danna') || textLower.includes('bank details')) {
+                     await reply(`*💰Payment Details*
 
-💡Bank - Commercial Bank - 8029210301
-💡Bank - Lolc Bank - 03210014631
-💡Bank - NSB - 109090193739
-💡Bank - Dialog Finance - 001021434294
-💡Bank - Peoples Bank - 015200130082418
+💡Bank - Commercial Bank
+Account number - 8029210301
+Name - G.M.Nethmintha Nimsara Jayasooriya
+Branch - Ampara
 
-*🪄EZ CASH* - 0740532742
-*🪙 BINANCE* - id: 842717887`);
+💡Bank - Lolc Bank
+Account number - 03210014631
+Name - G.M.Nethmintha Nimsara
+Branch - Ampara1
+
+💡Bank - NSB
+Account number - 109090193739
+Name - G.M.N.N.JAYASURIYA
+Branch - Ampara 2nd
+
+💡Bank - Dialog Finance PLC
+Account number -  001021434294
+Name - Gardiya Manawaduge Nethmintha Nimsara Jayasooriya
+Branch - Head Office
+
+💡Bank - Peoples Bank
+Account number - 015200130082418
+Name - Nethmintha nimsara
+Branch - branch Ampara - 015
+
+
+*🪄EZ CASH*
+
+0740532742
+
+*Ez Cash දාද්දි වැඩියෙන් rs.20 දාන්න*
+
+*🪙 BINANCE*
+
+id - 842717887
+
+
+*\`Thankyou !\`*`);
                 } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
                     try {
                         const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
@@ -605,78 +635,197 @@ Example: \`1\` for Download Commands
         try {
             switch (command) {
 
-                // ==========================================
-                // 🔥 FIXED: Delete message recover with @mention
+                                // ==========================================
+                // 🔥 FIXED: Delete message recover - Complete rewrite
                 // ==========================================
                 case 'remsg':
                 case 'delete':
                 case 'getdel': {
-                    let lastDeleted = deletedMessages.get(sender);
+                    console.log(`[DEBUG] 🔍 Searching deleted message for: ${sender}`);
+                    console.log(`[DEBUG] 📦 DeletedMessages size: ${deletedMessages.size}`);
                     
+                    // Log all stored keys for debugging
+                    if (deletedMessages.size > 0) {
+                        console.log(`[DEBUG] 📋 Stored keys: ${Array.from(deletedMessages.keys()).join(', ')}`);
+                    }
+
+                    let lastDeleted = null;
+                    let searchMethod = 'none';
+
+                    // ==========================================
+                    // 🔍 METHOD 1: Direct lookup by chat JID
+                    // ==========================================
+                    if (deletedMessages.has(sender)) {
+                        lastDeleted = deletedMessages.get(sender);
+                        searchMethod = 'direct_chat';
+                        console.log(`[DEBUG] ✅ Found by direct chat lookup`);
+                    }
+
+                    // ==========================================
+                    // 🔍 METHOD 2: Search by sender number
+                    // ==========================================
                     if (!lastDeleted) {
-                        for (const [chatId, deleted] of deletedMessages) {
-                            if (chatId === sender || chatId.includes(sender.split('@')[0])) {
-                                lastDeleted = deleted;
+                        const senderNumber = sender.split('@')[0];
+                        for (const [key, value] of deletedMessages) {
+                            if (key.includes(senderNumber) || key === senderNumber) {
+                                lastDeleted = value;
+                                searchMethod = 'by_number';
+                                console.log(`[DEBUG] ✅ Found by number search: ${key}`);
                                 break;
                             }
                         }
                     }
 
+                    // ==========================================
+                    // 🔍 METHOD 3: Search by sender JID in value
+                    // ==========================================
                     if (!lastDeleted) {
-                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ! 😔\n\n💡 *Tip:* Messages are cached for 5 minutes after deletion.');
+                        for (const [key, value] of deletedMessages) {
+                            if (value && value.sender) {
+                                const senderJid = value.sender;
+                                if (senderJid === sender || senderJid.includes(sender.split('@')[0])) {
+                                    lastDeleted = value;
+                                    searchMethod = 'by_sender_value';
+                                    console.log(`[DEBUG] ✅ Found by sender value: ${key}`);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // ==========================================
+                    // 🔍 METHOD 4: Get the most recent deleted message
+                    // ==========================================
+                    if (!lastDeleted) {
+                        let mostRecent = null;
+                        let recentTime = 0;
+                        for (const [key, value] of deletedMessages) {
+                            if (value && value.timestamp && value.timestamp > recentTime) {
+                                mostRecent = value;
+                                recentTime = value.timestamp;
+                                searchMethod = 'most_recent';
+                            }
+                        }
+                        if (mostRecent) {
+                            lastDeleted = mostRecent;
+                            console.log(`[DEBUG] ✅ Using most recent deleted message (${recentTime})`);
+                        }
+                    }
+
+                    // ==========================================
+                    // 🔍 METHOD 5: Get any deleted message
+                    // ==========================================
+                    if (!lastDeleted && deletedMessages.size > 0) {
+                        const firstKey = deletedMessages.keys().next().value;
+                        if (firstKey) {
+                            lastDeleted = deletedMessages.get(firstKey);
+                            searchMethod = 'first_available';
+                            console.log(`[DEBUG] ✅ Using first available: ${firstKey}`);
+                        }
+                    }
+
+                    // ==========================================
+                    // ❌ No deleted message found
+                    // ==========================================
+                    if (!lastDeleted) {
+                        console.log(`[DEBUG] ❌ No deleted message found. Cache size: ${deletedMessages.size}`);
+                        await reply(`❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ! 😔
+
+💡 *Tips:*
+• Messages are cached for 5 minutes after deletion
+• Make sure you deleted a message recently
+• Try sending a new message and deleting it
+
+📝 *Debug Info:*
+• Cache size: ${deletedMessages.size}
+• Your JID: ${sender}
+• Try: Send a message → Delete it → Type .remsg`);
                         return;
                     }
 
-                    const senderJid = lastDeleted.sender;
-                    const senderName = senderJid.split('@')[0];
-                    const time = lastDeleted.time;
-                    let originalText = lastDeleted.text;
-                    let quotedMsg = null;
+                    console.log(`[DEBUG] ✅ Found deleted message via: ${searchMethod}`);
+                    console.log(`[DEBUG] 📝 Message: ${lastDeleted.text ? lastDeleted.text.substring(0, 30) : 'No text'}`);
 
-                    if (lastDeleted.originalMsg) {
-                        quotedMsg = lastDeleted.originalMsg;
-                    }
+                    // ==========================================
+                    // 📝 Prepare recovery message
+                    // ==========================================
+                    const senderJid = lastDeleted.sender || sender;
+                    const senderName = senderJid.split('@')[0] || 'Unknown';
+                    const time = lastDeleted.time || new Date().toLocaleString();
+                    let originalText = lastDeleted.text || '[Media / Non-text message]';
+                    const messageType = lastDeleted.messageType || 'text';
+                    const isMedia = originalText === '[Media / Non-text message]' || 
+                                    originalText === '[Media message]' ||
+                                    messageType !== 'text' ||
+                                    originalText.includes('Media');
 
-                    const recoverText = `
-╭─❖ *🗑️ DELETED MESSAGE RECOVERED* ❖─╮
+                    // Build recovery text
+                    let recoverText = `╭─❖ *🗑️ DELETED MESSAGE RECOVERED* ❖─╮
 │
 │ 👤 *Sender:* @${senderName}
 │ ⏰ *Time:* ${time}
-│ 💬 *Message:*
+│ 📎 *Type:* ${messageType.toUpperCase()}
+│`;
+
+                    if (isMedia) {
+                        recoverText += `
+│ 📷 *Note:* This was a media message
+│ 💬 *Caption:* ${originalText === '[Media / Non-text message]' ? 'No caption' : originalText}
 │
-│ ${originalText}
+│ 💡 *To download:* Use .send command on this
+│    or use .vv for view-once media`;
+                    } else {
+                        recoverText += `
+│ 💬 *Message:*
+│ ${originalText}`;
+                    }
+
+                    recoverText += `
 │
 ╰─────────────────────────❖
 
 > _Recovered using NIM BOT Anti-Delete System_
-> _🔗 ${BOT_CHANNEL_LINK}_
-`;
+> _🔗 ${BOT_CHANNEL_LINK}_`;
 
                     try {
+                        // ==========================================
+                        // 📤 Send recovered message
+                        // ==========================================
                         await reply({
                             text: recoverText.trim(),
                             mentions: [senderJid]
                         });
 
-                        if (quotedMsg) {
+                        // ==========================================
+                        // 📌 Try to quote original message if available
+                        // ==========================================
+                        if (lastDeleted.originalMsg) {
                             try {
-                                await reply(`📌 *Original message quoted above*`, quotedMsg);
-                            } catch (e) {}
+                                await reply(`📌 *Original message sent above*`, lastDeleted.originalMsg);
+                            } catch (e) {
+                                console.log('Could not quote original message');
+                            }
                         }
 
+                        // ==========================================
+                        // ⏱️ Auto-clear after 5 minutes
+                        // ==========================================
                         setTimeout(() => {
-                            if (deletedMessages.get(sender) === lastDeleted) {
+                            const current = deletedMessages.get(sender);
+                            if (current === lastDeleted || !current) {
                                 deletedMessages.delete(sender);
+                                console.log(`[ANTI-DELETE] 🗑️ Cleared expired deleted message for ${sender}`);
                             }
                         }, 300000);
 
+                        console.log(`[ANTI-DELETE] ✅ Successfully recovered message for ${sender}`);
+
                     } catch (e) {
-                        console.error("Error sending recovered message:", e);
+                        console.error(`[ANTI-DELETE] ❌ Error sending recovered message:`, e);
                         await reply(`❌ Failed to recover message: ${e.message}`);
                     }
                     break;
                 }
-
                 // ==========================================
                 // 🔥 JID Command
                 // ==========================================
