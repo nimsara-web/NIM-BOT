@@ -39,9 +39,11 @@ const socketCreationTime = new Map();
 const activeSockets = new Map();
 const messageCache = new Map();
 const deletedMessages = new Map();
-const reconnectAttempts = new Map(); // Track reconnect attempts per number
+const reconnectAttempts = new Map();
 
-// Helper to get message text safely
+// ==========================================
+// 🔥 ENHANCED: Get message body with all types
+// ==========================================
 function getMessageBody(msg) {
     if (!msg.message) return '';
     let message = msg.message;
@@ -52,10 +54,12 @@ function getMessageBody(msg) {
     return message.conversation ||
         message.extendedTextMessage?.text ||
         message.imageMessage?.caption ||
-        message.videoMessage?.caption || '';
+        message.videoMessage?.caption ||
+        message.documentMessage?.caption ||
+        '';
 }
 
-// Helper to download audio as a Buffer to ensure 100% playback success
+// Helper to download audio
 async function getAudioBuffer(url) {
     try {
         const response = await fetch(url);
@@ -68,6 +72,9 @@ async function getAudioBuffer(url) {
     }
 }
 
+// ==========================================
+// 🔥 ENHANCED: MongoDB Auth State
+// ==========================================
 async function useMongoDBAuthState(number) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
     const sessionDir = path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`);
@@ -76,22 +83,18 @@ async function useMongoDBAuthState(number) {
     let dbData = await Session.findOne({ number: sanitizedNumber });
     const credsPath = path.join(sessionDir, 'creds.json');
 
-    // 🔥 CRITICAL FIX: Always load from MongoDB first, then write to file
     if (dbData && dbData.creds) {
         try {
-            // Check if creds has valid structure
             if (dbData.creds && typeof dbData.creds === 'object' && Object.keys(dbData.creds).length > 0) {
                 await fs.writeJson(credsPath, dbData.creds, { spaces: 2 });
                 console.log(`✅ Loaded existing session from MongoDB for ${sanitizedNumber}`);
             } else {
                 console.log(`⚠️ Invalid creds in MongoDB for ${sanitizedNumber}, will create new session`);
-                // Remove invalid entry
                 await Session.deleteOne({ number: sanitizedNumber });
                 dbData = null;
             }
         } catch (e) {
             console.error("Error writing initial creds from DB:", e);
-            // If file is corrupted, delete it and start fresh
             await fs.remove(credsPath);
             await Session.deleteOne({ number: sanitizedNumber });
             dbData = null;
@@ -100,7 +103,6 @@ async function useMongoDBAuthState(number) {
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
-    // 🔥 FIX: Enhanced saveCreds with better error handling
     const enhancedSaveCreds = async () => {
         try {
             await fs.ensureDir(sessionDir);
@@ -111,7 +113,6 @@ async function useMongoDBAuthState(number) {
                     const rawData = await fs.readFile(credsPath, 'utf8');
                     if (rawData && rawData.trim() !== '') {
                         const credsData = JSON.parse(rawData);
-                        // Validate creds data
                         if (credsData && typeof credsData === 'object' && Object.keys(credsData).length > 0) {
                             await Session.findOneAndUpdate(
                                 { number: sanitizedNumber },
@@ -123,8 +124,6 @@ async function useMongoDBAuthState(number) {
                                 { upsert: true, new: true }
                             );
                             console.log(`✅ Session saved to MongoDB for ${sanitizedNumber}`);
-                        } else {
-                            console.log(`⚠️ Invalid creds data for ${sanitizedNumber}, skipping save`);
                         }
                     }
                 } catch (e) {
@@ -142,58 +141,84 @@ async function useMongoDBAuthState(number) {
     };
 }
 
+// ==========================================
+// 🔥 ENHANCED: Setup Command Handlers
+// ==========================================
 function setupCommandHandlers(socket, number) {
 
-    // Anti-delete handler
+    // ==========================================
+    // 🔥 FIXED: Anti-Delete with better message caching
+    // ==========================================
     socket.ev.on('messages.update', async (updates) => {
         for (const { key, update } of updates) {
-            if (update) {
-                console.log("[UPDATE EVENT]", JSON.stringify(update));
-            }
-
             const protocolMsg = update?.protocolMessage || update?.message?.protocolMessage;
-
+            
             if (protocolMsg) {
-                console.log("[ANTI-DELETE] Protocol message detected, type:", protocolMsg.type);
-
-                if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key || protocolMsg.stanzaId) {
+                // Check for REVOKE (type 0 or 'REVOKE')
+                if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
                     const revokedId = protocolMsg.key?.id || protocolMsg.stanzaId;
-
+                    
                     if (!revokedId) continue;
 
-                    const cachedMsg = messageCache.get(revokedId);
+                    // Try to get from cache
+                    let cachedMsg = messageCache.get(revokedId);
+                    
+                    // If not found, try to find by stanzaId
+                    if (!cachedMsg) {
+                        for (const [key, value] of messageCache) {
+                            if (value.key?.id === revokedId) {
+                                cachedMsg = value;
+                                break;
+                            }
+                        }
+                    }
 
                     if (cachedMsg) {
                         const chatJid = cachedMsg.key.remoteJid;
                         const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
                         const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
 
+                        // Store deleted message with full details
                         deletedMessages.set(chatJid, {
                             sender: senderJid,
                             text: messageText,
-                            time: new Date().toLocaleTimeString(),
-                            originalMsg: cachedMsg
+                            time: new Date().toLocaleString(),
+                            originalMsg: cachedMsg,
+                            keyId: revokedId
                         });
 
                         console.log(`[ANTI-DELETE SUCCESS] Captured deleted message from: ${senderJid}`);
                     } else {
-                        console.log(`[ANTI-DELETE WARNING] Message ID not found in cache: ${revokedId}`);
+                        console.log(`[ANTI-DELETE WARNING] Message not found in cache: ${revokedId}`);
                     }
                 }
             }
         }
     });
 
+    // ==========================================
+    // 🔥 ENHANCED: Message cache & main handler
+    // ==========================================
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg) return;
 
-        // Cache message for anti-delete
+        // Cache all messages for anti-delete
         if (msg.key && msg.key.id) {
+            // Store with both ID and full message
             messageCache.set(msg.key.id, msg);
-            if (messageCache.size > 500) {
-                const oldestKey = messageCache.keys().next().value;
-                messageCache.delete(oldestKey);
+            // Also store with stanza ID if available
+            if (msg.key.stanzaId) {
+                messageCache.set(msg.key.stanzaId, msg);
+            }
+            
+            // Limit cache size
+            if (messageCache.size > 1000) {
+                const keys = messageCache.keys();
+                for (let i = 0; i < 500; i++) {
+                    const key = keys.next().value;
+                    if (key) messageCache.delete(key);
+                }
             }
         }
 
@@ -208,14 +233,15 @@ function setupCommandHandlers(socket, number) {
 
         // Auto-read logic
         global.autoReadStatus = global.autoReadStatus || 'off';
-
         if (global.autoReadStatus === 'all') {
             await socket.readMessages([msg.key]);
         } else if (global.autoReadStatus === 'cmd' && isCommand) {
             await socket.readMessages([msg.key]);
         }
 
-        // Channel forwarding info
+        // ==========================================
+        // 🔥 ENHANCED: Channel forwarding info
+        // ==========================================
         const channelInfo = {
             forwardingScore: 999,
             isForwarded: true,
@@ -245,7 +271,9 @@ function setupCommandHandlers(socket, number) {
             return await socket.sendMessage(sender, messagePayload, { quoted: quotedMsg });
         };
 
-        // Auto-reply logic
+        // ==========================================
+        // 🔥 FIXED: Auto-reply with better anti-loop protection
+        // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off';
 
         if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
@@ -257,42 +285,47 @@ function setupCommandHandlers(socket, number) {
 
             if (shouldAutoReply) {
                 const textLower = body.toLowerCase().trim();
-
-                const isBotSelfReply =
-                    textLower.includes('hi! 👋') ||
-                    textLower.includes('mokuth na innwa') ||
-                    textLower.includes('good morning🌤️') ||
-                    textLower.includes('good night✨') ||
-                    textLower.includes('bye🍻') ||
-                    textLower.includes('r2k gaming channels') ||
-                    textLower.includes('payment details') ||
-                    textLower.includes('eyaa hadapu bot');
-
-                if (isBotSelfReply) {
+                
+                // 🔥 STRONGER ANTI-LOOP: Check if message is from bot itself
+                const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
+                
+                // Check if message contains bot responses
+                const botResponsePatterns = [
+                    'hi! 👋', 'mokuth na innwa', 'good morning🌤️', 'good night✨',
+                    'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
+                    '🤖', '🎵', '📥', '🎬', '⚠️', '❌', '✅', '⚙️', '👀', '🏓'
+                ];
+                
+                const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
+                
+                // Skip if from bot or contains bot response
+                if (isFromBot || isBotResponse) {
                     return;
                 }
 
-                if (textLower.includes('hi') || textLower.includes('හායි') || textLower.includes('hello')) {
+                // Only match exact keywords to avoid false positives
+                const words = textLower.split(/\s+/);
+                const hasKeyword = (word) => words.some(w => w === word || w.includes(word));
+
+                if (hasKeyword('hi') || hasKeyword('හායි') || hasKeyword('hello')) {
                     await reply('Hi! 👋');
-                } else if (textLower.includes('mk') || textLower.includes('මොකද කරන්නෙ') || textLower.includes('mokada karanne')) {
+                } else if (hasKeyword('mk') || hasKeyword('මොකද') || textLower.includes('mokada karanne')) {
                     await reply('Mokuth Na innwa😊');
-                } else if (textLower.includes('gm') || textLower.includes('ගුඩ් මොර්නින්ග්') || textLower.includes('good morning')) {
+                } else if (hasKeyword('gm') || hasKeyword('ගුඩ්') || textLower.includes('good morning')) {
                     await reply('Good Morning🌤️');
-                } else if (textLower.includes('gn') || textLower.includes('ගුඩ් නයිජ්ට්') || textLower.includes('good night')) {
+                } else if (hasKeyword('gn') || hasKeyword('නයිජ්ට්') || textLower.includes('good night')) {
                     await reply('Good Night✨');
-                } else if (textLower.includes('by') || textLower.includes('බායි') || textLower.includes('bye')) {
+                } else if (hasKeyword('by') || hasKeyword('බායි') || hasKeyword('bye')) {
                     await reply('Bye🍻');
-                } else if (textLower.includes('r2k ge channel monawada') || textLower.includes('pawarage channel link') || textLower.includes('r2k gaming')) {
+                } else if (textLower.includes('r2k') || textLower.includes('gaming')) {
                     await reply(`*🔥 R2K Gaming Channels 🔥*
 
 💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
-
 💓Youtube - https://www.youtube.com/@rush.2.kill__0
-
 💓Fb - https://www.facebook.com/profile.php?id=61581297341821
 
 *\`Thankyou Yaluwe !\`*`);
-                } else if (textLower.includes('payment details') || textLower.includes('පේමන්ට් ඩීටේල්') || textLower.includes('bank details')) {
+                } else if (textLower.includes('payment') || textLower.includes('bank') || textLower.includes('ez cash')) {
                     await reply(`*💰Payment Details*
 
 💡Bank - Commercial Bank
@@ -333,7 +366,7 @@ id - 842717887
 
 
 *\`Thankyou !\`*`);
-                } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත')) {
+                } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
                     try {
                         const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
                         const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
@@ -346,13 +379,15 @@ id - 842717887
                             ptt: true
                         });
                     } catch (err) {
-                        console.error('Audio send error:', err);
                         await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎');
                     }
                 }
             }
         }
 
+        // ==========================================
+        // 🔥 COMMAND HANDLING
+        // ==========================================
         if (!isCommand) return;
 
         const isOwner = msg.key.fromMe;
@@ -371,30 +406,43 @@ id - 842717887
 
         try {
             switch (command) {
+
+                // ==========================================
+                // 🔥 FIXED: Delete message recover with @mention
+                // ==========================================
                 case 'remsg':
                 case 'delete':
                 case 'getdel': {
                     const lastDeleted = deletedMessages.get(sender);
                     if (!lastDeleted) {
-                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ !', msg);
+                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ!');
                         return;
                     }
+
+                    // Check if deleted message is from current chat
+                    const senderJid = lastDeleted.sender;
+                    const senderName = senderJid.split('@')[0];
 
                     const recoverText = `
 🗑️ *DELETED MESSAGE RECOVERED* 🗑️
 
-👤 *Sender:* @${lastDeleted.sender.split('@')[0]}
+👤 *Sender:* @${senderName}
 ⏰ *Time:* ${lastDeleted.time}
 💬 *Message:* ${lastDeleted.text}
+
+> _Recovered using NIM BOT Anti-Delete_
 `;
 
                     await reply({
                         text: recoverText.trim(),
-                        mentions: [lastDeleted.sender]
-                    }, lastDeleted.originalMsg);
+                        mentions: [senderJid]
+                    });
                     break;
                 }
 
+                // ==========================================
+                // 🔥 JID Command
+                // ==========================================
                 case 'jid': {
                     const inputArg = args[0] || '';
 
@@ -405,14 +453,13 @@ id - 842717887
                                 const inviteCode = match[1];
                                 const groupInfo = await socket.groupGetInviteInfo(inviteCode);
 
-                                const groupLinkJidText = `
+                                await reply(`
 🔗 *GROUP JID FROM LINK* 🔗
 
 🏷️ *Group Name:* ${groupInfo.subject || 'Unknown'}
 📌 *Group JID:* \`${groupInfo.id}\`
 👥 *Participants:* ${groupInfo.size || 'N/A'}
-`;
-                                await reply(groupLinkJidText.trim(), msg);
+`.trim(), msg);
                                 return;
                             }
                         } catch (err) {
@@ -427,46 +474,44 @@ id - 842717887
                         msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
                         'None';
 
-                    const jidText = `
+                    await reply(`
 📍 *JID INFORMATION* 📍
 
 💬 *Chat JID:* \`${chatJid}\`
 👤 *Sender JID:* \`${senderJid}\`
 🎯 *Quoted/Target JID:* \`${quotedJid}\`
-`;
-
-                    await reply(jidText.trim(), msg);
+`.trim(), msg);
                     break;
                 }
 
                 // ==========================================
-                // 🤖 AI CHATBOT (Fixed with fallback APIs)
+                // 🔥 FIXED: AI with fallback APIs
                 // ==========================================
                 case 'ai':
                 case 'gpt': {
                     const query = args.join(' ');
-                    if (!query) return reply(`⚠️ Please provide a question or prompt for AI!\nExample: .ai What is the capital of Sri Lanka?\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    if (!query) return reply(`⚠️ Please provide a question for AI!\nExample: .ai What is AI?\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
 
                     await reply(`🤖 Thinking... please wait... 🧠`);
                     try {
                         let aiAnswer = null;
                         let errorMsg = null;
 
-                        // Try API 1: BK9
+                        // API 1: BK9 Gemini
                         try {
                             const apiUrl = `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`;
-                            const apiRes = await axios.get(apiUrl, { timeout: 10000 });
+                            const apiRes = await axios.get(apiUrl, { timeout: 15000 });
                             aiAnswer = apiRes.data?.result || apiRes.data?.gpt || apiRes.data?.answer;
                         } catch (e1) {
                             errorMsg = e1.message;
                             console.log("BK9 API failed, trying fallback...");
                         }
 
-                        // Try API 2: Fallback
+                        // API 2: AffiliatePlus
                         if (!aiAnswer) {
                             try {
                                 const fallbackUrl = `https://api.affiliateplus.xyz/api/gpt?query=${encodeURIComponent(query)}`;
-                                const fallbackRes = await axios.get(fallbackUrl, { timeout: 10000 });
+                                const fallbackRes = await axios.get(fallbackUrl, { timeout: 15000 });
                                 aiAnswer = fallbackRes.data?.reply || fallbackRes.data?.response || fallbackRes.data?.result;
                             } catch (e2) {
                                 errorMsg = e2.message;
@@ -474,11 +519,11 @@ id - 842717887
                             }
                         }
 
-                        // Try API 3: Another fallback
+                        // API 3: Delirius
                         if (!aiAnswer) {
                             try {
                                 const thirdUrl = `https://delirius-apiofc.vercel.app/ai/gpt4?q=${encodeURIComponent(query)}`;
-                                const thirdRes = await axios.get(thirdUrl, { timeout: 10000 });
+                                const thirdRes = await axios.get(thirdUrl, { timeout: 15000 });
                                 aiAnswer = thirdRes.data?.data || thirdRes.data?.response || thirdRes.data?.result;
                             } catch (e3) {
                                 errorMsg = e3.message;
@@ -486,19 +531,29 @@ id - 842717887
                             }
                         }
 
+                        // API 4: Another fallback
                         if (!aiAnswer) {
-                            return reply(`❌ AI එකෙන් උත්තරයක් ලබාගන්න බැරි වුණා මචං. Error: ${errorMsg || 'No response from any API'}`);
+                            try {
+                                const fourthUrl = `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`;
+                                const fourthRes = await axios.get(fourthUrl, { timeout: 15000 });
+                                aiAnswer = fourthRes.data?.data || fourthRes.data?.response || fourthRes.data?.result;
+                            } catch (e4) {
+                                errorMsg = e4.message;
+                                console.log("Fourth API also failed.");
+                            }
                         }
 
-                        const aiResponseText = `
+                        if (!aiAnswer) {
+                            return reply(`❌ AI එකෙන් උත්තරයක් ලබාගන්න බැරි වුණා. Error: ${errorMsg || 'No response'}`);
+                        }
+
+                        await reply(`
 🤖 *AI ASSISTANT* 🤖
 
 ${aiAnswer.trim()}
 
 🔗 *Channel:* ${BOT_CHANNEL_LINK}
-`;
-
-                        await reply(aiResponseText.trim(), msg);
+`.trim(), msg);
 
                     } catch (e) {
                         console.error("AI command error:", e);
@@ -508,12 +563,11 @@ ${aiAnswer.trim()}
                 }
 
                 // ==========================================
-                // 📥 DOWNLOAD COMMANDS (FIXED - Using direct exec)
+                // 🔥 FIXED: SONG command with fallback
                 // ==========================================
-
                 case 'song': {
                     const query = args.join(' ');
-                    if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike Mage Hithe\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                    if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
 
                     await reply(`🔍 Searching for *${query}*... 🎶`);
                     try {
@@ -521,13 +575,38 @@ ${aiAnswer.trim()}
                         const video = search.videos[0];
                         if (!video) return reply(`❌ Song not found! Try another name.`);
 
-                        await reply(`🎵 Found: *${video.title}*\n📥 Generating audio link, please wait...`);
+                        await reply(`🎵 Found: *${video.title}*\n📥 Generating audio...`);
 
-                        const { stdout } = await execPromise(
-                            `yt-dlp --get-url -f bestaudio "${video.url}"`
-                        );
+                        let audioUrl = null;
+                        let usedFallback = false;
 
-                        const audioUrl = stdout.trim().split('\n')[0];
+                        // Try 1: yt-dlp
+                        try {
+                            const { stdout } = await execPromise(
+                                `yt-dlp --get-url -f bestaudio "${video.url}"`
+                            );
+                            audioUrl = stdout.trim().split('\n')[0];
+                            if (audioUrl) console.log("yt-dlp succeeded for song");
+                        } catch (e) {
+                            console.log("yt-dlp failed, trying fallback...");
+                            usedFallback = true;
+                        }
+
+                        // Fallback: ytdl-core
+                        if (!audioUrl) {
+                            try {
+                                const ytdl = require('@distube/ytdl-core');
+                                const info = await ytdl.getInfo(video.url);
+                                const format = ytdl.chooseFormat(info, {
+                                    quality: 'highestaudio',
+                                    filter: 'audioonly'
+                                });
+                                audioUrl = format.url;
+                                if (audioUrl) console.log("ytdl-core fallback succeeded");
+                            } catch (e) {
+                                console.log("ytdl-core fallback failed:", e.message);
+                            }
+                        }
 
                         if (!audioUrl) {
                             return reply(`❌ Audio link එක ලබාගන්න බැරි වුණා.`);
@@ -556,28 +635,50 @@ ${aiAnswer.trim()}
                     break;
                 }
 
+                // ==========================================
+                // 🔥 FIXED: TIKTOK command with fallback
+                // ==========================================
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
                     if (!url || !url.includes('tiktok.com')) {
-                        return reply(`⚠️ Please provide a valid TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        return reply(`⚠️ Please provide a TikTok video link!\nExample: .tt https://vt.tiktok.com/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
 
                     await reply(`📥 Processing TikTok video... Please wait ⏳`);
                     try {
-                        const { stdout } = await execPromise(
-                            `yt-dlp --get-url "${url}"`
-                        );
+                        let videoUrl = null;
 
-                        const videoUrl = stdout.trim().split('\n')[0];
+                        // Try 1: yt-dlp
+                        try {
+                            const { stdout } = await execPromise(
+                                `yt-dlp --get-url "${url}"`
+                            );
+                            videoUrl = stdout.trim().split('\n')[0];
+                            if (videoUrl) console.log("yt-dlp succeeded for TikTok");
+                        } catch (e) {
+                            console.log("yt-dlp failed for TikTok, trying API...");
+                        }
 
-                        if (!videoUrl) return reply(`❌ TikTok වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා.`);
+                        // Fallback: Public API
+                        if (!videoUrl) {
+                            try {
+                                const apiUrl = `https://api.vevioz.com/api/button/tiktok/${encodeURIComponent(url)}`;
+                                const apiRes = await axios.get(apiUrl, { timeout: 15000 });
+                                videoUrl = apiRes.data?.downloadUrl || apiRes.data?.url || apiRes.data?.link;
+                                if (videoUrl) console.log("TikTok API fallback succeeded");
+                            } catch (e) {
+                                console.log("TikTok API fallback failed:", e.message);
+                            }
+                        }
 
-                        const caption = `🎬 *TikTok Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
+                        if (!videoUrl) {
+                            return reply(`❌ TikTok වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා.`);
+                        }
 
                         await socket.sendMessage(sender, {
                             video: { url: videoUrl },
-                            caption: caption
+                            caption: `🎬 *TikTok Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -587,6 +688,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
+                // ==========================================
+                // 🔥 FIXED: YOUTUBE command with fallback
+                // ==========================================
                 case 'yt':
                 case 'youtube': {
                     const url = args[0];
@@ -599,15 +703,46 @@ ${aiAnswer.trim()}
                     try {
                         await reply(`📥 Processing YouTube download... Please wait ⏳`);
 
-                        let cmd;
-                        if (type === 'audio') {
-                            cmd = `yt-dlp --get-url -f bestaudio "${url}"`;
-                        } else {
-                            cmd = `yt-dlp --get-url -f "best[ext=mp4]/best" "${url}"`;
+                        let mediaUrl = null;
+
+                        // Try 1: yt-dlp
+                        try {
+                            let cmd;
+                            if (type === 'audio') {
+                                cmd = `yt-dlp --get-url -f bestaudio "${url}"`;
+                            } else {
+                                cmd = `yt-dlp --get-url -f "best[ext=mp4]/best" "${url}"`;
+                            }
+                            const { stdout } = await execPromise(cmd);
+                            mediaUrl = stdout.trim().split('\n')[0];
+                            if (mediaUrl) console.log("yt-dlp succeeded for YouTube");
+                        } catch (e) {
+                            console.log("yt-dlp failed for YouTube, trying fallback...");
                         }
 
-                        const { stdout } = await execPromise(cmd);
-                        const mediaUrl = stdout.trim().split('\n')[0];
+                        // Fallback: ytdl-core
+                        if (!mediaUrl) {
+                            try {
+                                const ytdl = require('@distube/ytdl-core');
+                                const info = await ytdl.getInfo(url);
+                                if (type === 'audio') {
+                                    const format = ytdl.chooseFormat(info, {
+                                        quality: 'highestaudio',
+                                        filter: 'audioonly'
+                                    });
+                                    mediaUrl = format.url;
+                                } else {
+                                    const format = ytdl.chooseFormat(info, {
+                                        quality: 'highestvideo',
+                                        filter: 'videoandaudio'
+                                    });
+                                    mediaUrl = format.url;
+                                }
+                                if (mediaUrl) console.log("ytdl-core fallback succeeded");
+                            } catch (e) {
+                                console.log("ytdl-core fallback failed:", e.message);
+                            }
+                        }
 
                         if (!mediaUrl) return reply(`❌ Failed to fetch YouTube media.`);
 
@@ -630,30 +765,50 @@ ${aiAnswer.trim()}
                     break;
                 }
 
+                // ==========================================
+                // 🔥 FIXED: FACEBOOK command with fallback
+                // ==========================================
                 case 'fb':
                 case 'facebook': {
                     const url = args[0];
                     if (!url || (!url.includes('facebook.com') && !url.includes('fb.watch') && !url.includes('fb.me'))) {
-                        return reply(`⚠️ Please provide a valid Facebook video link!\nExample: .fb https://www.facebook.com/share/v/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
+                        return reply(`⚠️ Please provide a Facebook video link!\nExample: .fb https://www.facebook.com/share/v/xxxx/\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     }
 
                     await reply(`📥 Processing Facebook video... Please wait ⏳`);
                     try {
-                        const { stdout } = await execPromise(
-                            `yt-dlp --get-url "${url}"`
-                        );
+                        let videoUrl = null;
 
-                        const videoUrl = stdout.trim().split('\n')[0];
-
-                        if (!videoUrl) {
-                            return reply(`❌ Facebook වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා මචං.`);
+                        // Try 1: yt-dlp
+                        try {
+                            const { stdout } = await execPromise(
+                                `yt-dlp --get-url "${url}"`
+                            );
+                            videoUrl = stdout.trim().split('\n')[0];
+                            if (videoUrl) console.log("yt-dlp succeeded for Facebook");
+                        } catch (e) {
+                            console.log("yt-dlp failed for Facebook, trying API...");
                         }
 
-                        const caption = `🎬 *Facebook Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`;
+                        // Fallback: Public API
+                        if (!videoUrl) {
+                            try {
+                                const apiUrl = `https://api.vevioz.com/api/button/facebook/${encodeURIComponent(url)}`;
+                                const apiRes = await axios.get(apiUrl, { timeout: 15000 });
+                                videoUrl = apiRes.data?.downloadUrl || apiRes.data?.url || apiRes.data?.link;
+                                if (videoUrl) console.log("Facebook API fallback succeeded");
+                            } catch (e) {
+                                console.log("Facebook API fallback failed:", e.message);
+                            }
+                        }
+
+                        if (!videoUrl) {
+                            return reply(`❌ Facebook වීඩියෝ ලින්ක් එක ලබාගන්න බැරි වුණා.`);
+                        }
 
                         await socket.sendMessage(sender, {
                             video: { url: videoUrl },
-                            caption: caption
+                            caption: `🎬 *Facebook Video Downloaded*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -663,6 +818,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
+                // ==========================================
+                // 🔥 TOURL command
+                // ==========================================
                 case 'tourl':
                 case 'url': {
                     try {
@@ -684,22 +842,17 @@ ${aiAnswer.trim()}
                         form.append('fileToUpload', buffer, { filename: `media.${ext}`, contentType: mime });
 
                         const uploadRes = await axios.post('https://catbox.moe/user/api.php', form, {
-                            headers: {
-                                ...form.getHeaders()
-                            }
+                            headers: { ...form.getHeaders() }
                         });
 
                         if (uploadRes.data && uploadRes.data.startsWith('http')) {
-                            const mediaUrl = uploadRes.data.trim();
-
-                            const responseText = `
+                            await reply(`
 🔗 *MEDIA URL GENERATED* 🔗
 
-*Direct Link:* ${mediaUrl}
+*Direct Link:* ${uploadRes.data.trim()}
 
 🔗 *Channel:* ${BOT_CHANNEL_LINK}
-`;
-                            await reply(responseText.trim(), msg);
+`.trim(), msg);
                         } else {
                             return reply(`❌ Upload failed. Please try again later.`);
                         }
@@ -711,6 +864,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
+                // ==========================================
+                // 🔥 MENU command
+                // ==========================================
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
@@ -753,33 +909,54 @@ ${aiAnswer.trim()}
 *╎🔖 ᴅᴇꜱᴄ- Show bot uptime.*
 *╎*
 *╎📍ᴄᴍᴅ - .settings*
-*╎🔖 ᴅᴇꜱᴄ- Manage bot settings (Auto status/Online).*
+*╎🔖 ᴅᴇꜱᴄ- Manage bot settings.*
 *╎*
 *╎📍ᴄᴍᴅ - .setprefix*
-*╎🔖 ᴅᴇꜱᴄ- Change bot command prefix.*
+*╎🔖 ᴅᴇꜱᴄ- Change command prefix.*
 *╎*
 *╎📍ᴄᴍᴅ - .send*
-*╎🔖 ᴅᴇꜱᴄ- Download/Save quoted status or media.*
+*╎🔖 ᴅᴇꜱᴄ- Download/Save quoted media.*
 *╎*
 *╎📍ᴄᴍᴅ - .mode public/group/inbox/private*
 *╎🔖 ᴅᴇꜱᴄ- Bot Run Mode.*
 *╎*
 *╎📍ᴄᴍᴅ - .autoread all/cmd/off*
-*╎🔖 ᴅᴇꜱᴄ- Auto Read Massege All Massege/Command Massege/Off Read.*
+*╎🔖 ᴅᴇꜱᴄ- Auto Read Messages.*
 *╎*
 *╎📍ᴄᴍᴅ - .vv*
-*╎🔖 ᴅᴇꜱᴄ- Download View Once image or video.*
+*╎🔖 ᴅᴇꜱᴄ- Download View Once media.*
 *╎*
 *╎📍ᴄᴍᴅ - .jid*
-*╎🔖 ᴅᴇꜱᴄ- Channel & Group & Chat JID.*
+*╎🔖 ᴅᴇꜱᴄ- Get JID info.*
 *╎*
 *╎📍ᴄᴍᴅ - .owner*
-*╎🔖 ᴅᴇꜱᴄ- Bot owner information.*
+*╎🔖 ᴅᴇꜱᴄ- Bot owner info.*
+*╎*
+*╎📍ᴄᴍᴅ - .remsg*
+*╎🔖 ᴅᴇꜱᴄ- Recover deleted message.*
+*╎*
+*╎📍ᴄᴍᴅ - .song*
+*╎🔖 ᴅᴇꜱᴄ- Download songs.*
+*╎*
+*╎📍ᴄᴍᴅ - .tt / .tiktok*
+*╎🔖 ᴅᴇꜱᴄ- Download TikTok videos.*
+*╎*
+*╎📍ᴄᴍᴅ - .yt / .youtube*
+*╎🔖 ᴅᴇꜱᴄ- Download YouTube videos/audio.*
+*╎*
+*╎📍ᴄᴍᴅ - .fb / .facebook*
+*╎🔖 ᴅᴇꜱᴄ- Download Facebook videos.*
+*╎*
+*╎📍ᴄᴍᴅ - .ai / .gpt*
+*╎🔖 ᴅᴇꜱᴄ- AI Chatbot.*
+*╎*
+*╎📍ᴄᴍᴅ - .tourl / .url*
+*╎🔖 ᴅᴇꜱᴄ- Convert media to URL.*
 *╰───────────────────────*
 
 🔗 Web: https://nimsara-official.vercel.app/
 
-*🏮 FOLLOW MINE CHANNEL :- ${BOT_CHANNEL_LINK}*
+*🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _MADE BY NIMSARA_
 `;
@@ -802,6 +979,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
+                // ==========================================
+                // 🔥 OTHER COMMANDS (mode, ping, autoread, etc.)
+                // ==========================================
                 case 'mode': {
                     if (!msg.key.fromMe) {
                         return reply(`⚠️ This command can only be used by the **Bot Owner**! ❌`);
@@ -855,7 +1035,7 @@ ${aiAnswer.trim()}
                     }
 
                     global.autoReadStatus = option;
-                    await reply(`✅ Auto-Read mode successfully changed to: *${global.autoReadStatus.toUpperCase()}* 👁️‍🗨️`);
+                    await reply(`✅ Auto-Read mode changed to: *${global.autoReadStatus.toUpperCase()}* 👁️‍🗨️`);
                     break;
                 }
 
@@ -872,7 +1052,7 @@ ${aiAnswer.trim()}
                         msgText += `Current Mode: *${(global.autoReplyMode || 'off').toUpperCase()}*\n\n`;
                         msgText += "Available Options:\n";
                         msgText += "• \`.autoreply all\` - Enable for both Inbox & Groups\n";
-                        msgText += "• \`.autoread inbox\` - Enable only for Inbox (Private)\n";
+                        msgText += "• \`.autoreply inbox\` - Enable only for Inbox (Private)\n";
                         msgText += "• \`.autoreply group\` - Enable only for Groups\n";
                         msgText += "• \`.autoreply off\` - Turn off auto-reply\n\n";
                         msgText += `🔗 Channel: ${BOT_CHANNEL_LINK}`;
@@ -880,7 +1060,7 @@ ${aiAnswer.trim()}
                     }
 
                     global.autoReplyMode = option;
-                    await reply(`✅ Auto-Reply mode successfully changed to: *${global.autoReplyMode.toUpperCase()}* ⚡`);
+                    await reply(`✅ Auto-Reply mode changed to: *${global.autoReplyMode.toUpperCase()}* ⚡`);
                     break;
                 }
 
@@ -918,7 +1098,7 @@ ${aiAnswer.trim()}
                     const hours = Math.floor(uptime / 3600);
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
-                    await reply(`⏱️ *${botName} Uptime:* ${hours} hours, ${minutes} minutes, ${seconds} seconds.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY Nimsara_`);
+                    await reply(`⏱️ *${botName} Uptime:* ${hours}h ${minutes}m ${seconds}s\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> _MADE BY Nimsara_`);
                     break;
                 }
 
@@ -1126,7 +1306,9 @@ ${aiAnswer.trim()}
     });
 }
 
-// Auto Status Seen, Auto Status React & Always Online Handlers
+// ==========================================
+// 🔥 Status & Presence Handlers
+// ==========================================
 function setupStatusAndPresenceHandlers(socket, number) {
     const getBotNumber = () => socket.user?.id ? socket.user.id.split(':')[0] : number;
 
@@ -1187,7 +1369,9 @@ function setupStatusAndPresenceHandlers(socket, number) {
     });
 }
 
-// 🔥 NEW: Function to check and restore existing sessions on startup
+// ==========================================
+// 🔥 Restore Existing Sessions
+// ==========================================
 async function restoreExistingSessions() {
     try {
         console.log("🔄 Checking for existing sessions to restore...");
@@ -1203,14 +1387,12 @@ async function restoreExistingSessions() {
         for (const session of allSessions) {
             if (session.number && session.creds && Object.keys(session.creds).length > 0) {
                 try {
-                    // Check if already active
                     if (activeSockets.has(session.number)) {
                         console.log(`✅ Session ${session.number} already active.`);
                         continue;
                     }
 
                     console.log(`🔄 Restoring session for ${session.number}...`);
-                    // Start bot without sending pairing code (will use existing session)
                     await StartBot(session.number, null, true);
                     await delay(2000);
                 } catch (e) {
@@ -1224,10 +1406,12 @@ async function restoreExistingSessions() {
     }
 }
 
+// ==========================================
+// 🔥 Start Bot Function
+// ==========================================
 async function StartBot(number, res = null, isRestore = false) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
 
-    // Check if already connected
     if (activeSockets.has(sanitizedNumber)) {
         console.log(`ℹ️ Bot already connected for ${sanitizedNumber}`);
         if (res && typeof res.send === 'function' && !res.headersSent) {
@@ -1248,7 +1432,6 @@ async function StartBot(number, res = null, isRestore = false) {
             printQRInTerminal: false,
             logger,
             browser: Browsers.macOS('Safari'),
-            // 🔥 Important: Keep connection alive
             keepAliveIntervalMs: 30000,
             connectTimeoutMs: 60000
         });
@@ -1260,8 +1443,6 @@ async function StartBot(number, res = null, isRestore = false) {
 
             if (connection === 'open') {
                 console.log(`✅ Bot successfully connected for number: ${sanitizedNumber}`);
-                
-                // Reset reconnect attempts on successful connection
                 reconnectAttempts.set(sanitizedNumber, 0);
 
                 try {
@@ -1275,7 +1456,6 @@ async function StartBot(number, res = null, isRestore = false) {
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
 
-                // Only send welcome message if not restoring
                 if (!isRestore) {
                     try {
                         await delay(2000);
@@ -1326,13 +1506,11 @@ async function StartBot(number, res = null, isRestore = false) {
                 console.log(`⚠️ Connection closed for ${sanitizedNumber}, status code: ${statusCode}`);
                 activeSockets.delete(sanitizedNumber);
 
-                // 🔥 Auto-reconnect logic
                 if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                     console.log(`❌ Session logged out for ${sanitizedNumber}. Removing from database.`);
                     await Session.deleteOne({ number: sanitizedNumber });
                     await fs.remove(path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`));
                 } else {
-                    // Try to reconnect with exponential backoff
                     const attempts = (reconnectAttempts.get(sanitizedNumber) || 0) + 1;
                     reconnectAttempts.set(sanitizedNumber, attempts);
                     
@@ -1349,11 +1527,9 @@ async function StartBot(number, res = null, isRestore = false) {
         setupCommandHandlers(sock, sanitizedNumber);
         setupStatusAndPresenceHandlers(sock, sanitizedNumber);
 
-        // 🔥 Only request pairing code if not registered AND not restoring
         if (!sock.authState.creds.registered) {
             if (isRestore) {
-                console.log(`⚠️ Session ${sanitizedNumber} not registered but restore attempted. Will try to reconnect.`);
-                // Try to reconnect after a delay
+                console.log(`⚠️ Session ${sanitizedNumber} not registered but restore attempted.`);
                 setTimeout(() => {
                     if (!activeSockets.has(sanitizedNumber)) {
                         StartBot(sanitizedNumber, null, false);
@@ -1387,7 +1563,11 @@ async function StartBot(number, res = null, isRestore = false) {
     }
 }
 
-// 🔥 NEW: REST API endpoint to manually logout a session
+// ==========================================
+// 🔥 API Endpoints
+// ==========================================
+
+// Logout
 router.post('/logout', async (req, res) => {
     const { number } = req.body || req.query;
     if (!number) return res.status(400).send({ error: 'Phone number is required!' });
@@ -1395,7 +1575,6 @@ router.post('/logout', async (req, res) => {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
 
     try {
-        // Close socket if active
         if (activeSockets.has(sanitizedNumber)) {
             const sock = activeSockets.get(sanitizedNumber);
             try {
@@ -1407,10 +1586,7 @@ router.post('/logout', async (req, res) => {
             activeSockets.delete(sanitizedNumber);
         }
 
-        // Remove from database
         await Session.deleteOne({ number: sanitizedNumber });
-        
-        // Remove session files
         const sessionDir = path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`);
         await fs.remove(sessionDir);
 
@@ -1426,7 +1602,7 @@ router.post('/logout', async (req, res) => {
     }
 });
 
-// 🔥 NEW: API to get all active sessions
+// Get all sessions
 router.get('/sessions', async (req, res) => {
     try {
         const allSessions = await Session.find({});
@@ -1446,7 +1622,7 @@ router.get('/sessions', async (req, res) => {
     }
 });
 
-// 🔥 NEW: API to manually reconnect a session
+// Reconnect
 router.post('/reconnect', async (req, res) => {
     const { number } = req.body || req.query;
     if (!number) return res.status(400).send({ error: 'Phone number is required!' });
@@ -1454,7 +1630,6 @@ router.post('/reconnect', async (req, res) => {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
 
     try {
-        // Check if session exists in database
         const session = await Session.findOne({ number: sanitizedNumber });
         if (!session) {
             return res.status(404).send({ 
@@ -1462,7 +1637,6 @@ router.post('/reconnect', async (req, res) => {
             });
         }
 
-        // If already active, just return status
         if (activeSockets.has(sanitizedNumber)) {
             return res.send({ 
                 status: "Already connected", 
@@ -1470,7 +1644,6 @@ router.post('/reconnect', async (req, res) => {
             });
         }
 
-        // Start bot with restore mode
         await StartBot(sanitizedNumber, null, true);
         
         res.send({ 
@@ -1482,25 +1655,23 @@ router.post('/reconnect', async (req, res) => {
     }
 });
 
-// Main route for pairing
+// Main pairing route
 router.get('/', async (req, res) => {
     const { number } = req.query;
     if (!number) return res.status(400).send({ error: 'Phone number is required!' });
 
     try {
-        // Check if session already exists in database
-        const existingSession = await Session.findOne({ number: number.replace(/[^0-9]/g, '') });
+        const sanitized = number.replace(/[^0-9]/g, '');
+        const existingSession = await Session.findOne({ number: sanitized });
         
         if (existingSession && existingSession.creds && Object.keys(existingSession.creds).length > 0) {
-            // If session exists but not active, try to restore
-            if (!activeSockets.has(number.replace(/[^0-9]/g, ''))) {
+            if (!activeSockets.has(sanitized)) {
                 console.log(`🔄 Existing session found for ${number}, attempting to restore...`);
                 await StartBot(number, res, true);
                 return;
             }
         }
 
-        // If no existing session, start fresh
         await StartBot(number, res, false);
     } catch (e) {
         console.error("Route router.get error:", e);
@@ -1510,10 +1681,9 @@ router.get('/', async (req, res) => {
     }
 });
 
-// 🔥 Start restoring sessions when server starts
+// Restore sessions on startup
 (async () => {
     try {
-        // Wait for MongoDB connection
         await delay(5000);
         await restoreExistingSessions();
     } catch (e) {
