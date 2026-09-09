@@ -40,6 +40,7 @@ const activeSockets = new Map();
 const messageCache = new Map();
 const deletedMessages = new Map();
 const reconnectAttempts = new Map();
+const userCategoryState = new Map(); // Track user's last category
 
 // ==========================================
 // 🔥 ENHANCED: Get message body with all types
@@ -154,16 +155,13 @@ function setupCommandHandlers(socket, number) {
             const protocolMsg = update?.protocolMessage || update?.message?.protocolMessage;
             
             if (protocolMsg) {
-                // Check for REVOKE (type 0 or 'REVOKE')
                 if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
                     const revokedId = protocolMsg.key?.id || protocolMsg.stanzaId;
                     
                     if (!revokedId) continue;
 
-                    // Try to get from cache
                     let cachedMsg = messageCache.get(revokedId);
                     
-                    // If not found, try to find by stanzaId
                     if (!cachedMsg) {
                         for (const [key, value] of messageCache) {
                             if (value.key?.id === revokedId) {
@@ -178,7 +176,6 @@ function setupCommandHandlers(socket, number) {
                         const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
                         const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
 
-                        // Store deleted message with full details
                         deletedMessages.set(chatJid, {
                             sender: senderJid,
                             text: messageText,
@@ -205,14 +202,11 @@ function setupCommandHandlers(socket, number) {
 
         // Cache all messages for anti-delete
         if (msg.key && msg.key.id) {
-            // Store with both ID and full message
             messageCache.set(msg.key.id, msg);
-            // Also store with stanza ID if available
             if (msg.key.stanzaId) {
                 messageCache.set(msg.key.stanzaId, msg);
             }
             
-            // Limit cache size
             if (messageCache.size > 1000) {
                 const keys = messageCache.keys();
                 for (let i = 0; i < 500; i++) {
@@ -272,6 +266,244 @@ function setupCommandHandlers(socket, number) {
         };
 
         // ==========================================
+        // 🔥 CATEGORY MENU HANDLER (Number replies)
+        // ==========================================
+        // මෙය commands වලට කලින් check කරයි
+        if (!isCommand && body.match(/^[1-5]$/)) {
+            const categoryNum = parseInt(body);
+            let categoryMenu = '';
+            let categoryName = '';
+            const botName = await get('BOT_NAME', number) || 'NIM BOT';
+
+            switch(categoryNum) {
+                case 1:
+                    categoryName = '📥 DOWNLOAD COMMANDS';
+                    categoryMenu = `
+*╭─\`📥 DOWNLOAD COMMANDS\`┈⊷*
+*╎*
+*╎ 🎵 .song [song name]*
+*╎    Download songs from YouTube*
+*╎*
+*╎ 🎬 .tt / .tiktok [url]*
+*╎    Download TikTok videos*
+*╎*
+*╎ 🎬 .yt / .youtube [url] [video/audio]*
+*╎    Download YouTube videos/audio*
+*╎*
+*╎ 🎬 .fb / .facebook [url]*
+*╎    Download Facebook videos*
+*╎*
+*╎ 🔗 .tourl / .url*
+*╎    Convert media to URL*
+*╎*
+*╎ 📸 .vv / .viewonce*
+*╎    Download View Once media*
+*╎*
+*╎ 📥 .send / .save*
+*╎    Download/Save quoted media*
+*╎*
+*╰───────────────────────*
+
+💡 *Reply with 0 to go back to Main Menu*
+`;
+                    break;
+
+                case 2:
+                    categoryName = '⚙️ SETTINGS COMMANDS';
+                    categoryMenu = `
+*╭─\`⚙️ SETTINGS COMMANDS\`┈⊷*
+*╎*
+*╎ 📋 .settings*
+*╎    View current settings*
+*╎*
+*╎ 🔀 .mode [public/group/inbox/private]*
+*╎    Change bot run mode*
+*╎*
+*╎ 👁️ .autoread [all/cmd/off]*
+*╎    Auto-read messages*
+*╎*
+*╎ 🤖 .autoreply [all/inbox/group/off]*
+*╎    Auto-reply settings*
+*╎*
+*╎ 📷 .autoview [on/off]*
+*╎    Auto-view status*
+*╎*
+*╎ ❤️ .autolike [on/off]*
+*╎    Auto-like status*
+*╎*
+*╎ 🟢 .alwaysonline [on/off]*
+*╎    Always online mode*
+*╎*
+*╎ 🔤 .setprefix [new prefix]*
+*╎    Change command prefix*
+*╎*
+*╰───────────────────────*
+
+💡 *Reply with 0 to go back to Main Menu*
+`;
+                    break;
+
+                case 3:
+                    categoryName = '👑 OWNER COMMANDS';
+                    categoryMenu = `
+*╭─\`👑 OWNER COMMANDS\`┈⊷*
+*╎*
+*╎ 👤 .owner*
+*╎    Bot owner information*
+*╎*
+*╎ 🔄 .mode [public/group/inbox/private]*
+*╎    Change bot run mode*
+*╎*
+*╎ ⚙️ .settings*
+*╎    View all settings*
+*╎*
+*╎ 🔤 .setprefix [new prefix]*
+*╎    Change command prefix*
+*╎*
+*╎ 👁️ .autoread [all/cmd/off]*
+*╎    Auto-read settings*
+*╎*
+*╎ 🤖 .autoreply [all/inbox/group/off]*
+*╎    Auto-reply settings*
+*╎*
+*╎ 📷 .autoview [on/off]*
+*╎    Auto-view status*
+*╎*
+*╎ ❤️ .autolike [on/off]*
+*╎    Auto-like status*
+*╎*
+*╎ 🟢 .alwaysonline [on/off]*
+*╎    Always online mode*
+*╎*
+*╰───────────────────────*
+
+💡 *Reply with 0 to go back to Main Menu*
+`;
+                    break;
+
+                case 4:
+                    categoryName = '🛠️ UTILITY COMMANDS';
+                    categoryMenu = `
+*╭─\`🛠️ UTILITY COMMANDS\`┈⊷*
+*╎*
+*╎ 🏓 .ping*
+*╎    Check bot response time*
+*╎*
+*╎ ⏱️ .runtime*
+*╎    Show bot uptime*
+*╎*
+*╎ 📍 .jid*
+*╎    Get JID information*
+*╎*
+*╎ ❤️ .alive / .status*
+*╎    Check bot status*
+*╎*
+*╎ 🗑️ .remsg / .delete / .getdel*
+*╎    Recover deleted message*
+*╎*
+*╎ 📋 .menu / .help*
+*╎    Show this menu*
+*╎*
+*╰───────────────────────*
+
+💡 *Reply with 0 to go back to Main Menu*
+`;
+                    break;
+
+                case 5:
+                    categoryName = '🤖 AI & OTHER COMMANDS';
+                    categoryMenu = `
+*╭─\`🤖 AI & OTHER COMMANDS\`┈⊷*
+*╎*
+*╎ 🤖 .ai / .gpt [question]*
+*╎    AI Chatbot (Free)*
+*╎*
+*╎ ⏱️ .runtime*
+*╎    Show bot uptime*
+*╎*
+*╎ 📋 .menu / .help*
+*╎    Show this menu*
+*╎*
+*╎ 👤 .owner*
+*╎    Bot owner info*
+*╎*
+*╎ 🏓 .ping*
+*╎    Check response time*
+*╎*
+*╰───────────────────────*
+
+💡 *Reply with 0 to go back to Main Menu*
+`;
+                    break;
+
+                default:
+                    return;
+            }
+
+            await reply(`
+*╭─\`${categoryName}\`┈⊷*
+${categoryMenu}
+`.trim());
+
+            userCategoryState.set(sender, categoryNum);
+            return;
+        }
+
+        // ==========================================
+        // 🔥 GO BACK TO MAIN MENU (0)
+        // ==========================================
+        if (!isCommand && body === '0') {
+            const startTime = socketCreationTime.get(number) || Date.now();
+            const uptime = Math.floor((Date.now() - startTime) / 1000);
+            const hours = Math.floor(uptime / 3600);
+            const minutes = Math.floor((uptime % 3600) / 60);
+            const seconds = Math.floor(uptime % 60);
+            const botName = await get('BOT_NAME', number) || 'NIM BOT';
+
+            const mainMenu = `
+*👋 ${botName.toUpperCase()} 🧛🏻*
+*-- The Mini Whatsapp Bot Experience --*
+
+> Created By Nimsara 🧛🏻
+> 🪀 Contact - 0784280074
+
+─────────────────────
+*BOT STATUS 👾*
+> Bot Name : ${botName}
+> Run Time : ${hours}h ${minutes}m ${seconds}s
+> Host : RENDER
+> Activers : ${activeSockets.size}
+> Bot Channel : ✅ Followed
+> Bot Creator : NIMSARA
+─────────────────────
+
+*╭─\`💠 𝗕𝗢𝗧 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┈⊷*
+*╎*
+*╎ 1️⃣ - 📥 DOWNLOAD COMMANDS*
+*╎ 2️⃣ - ⚙️ SETTINGS COMMANDS*
+*╎ 3️⃣ - 👑 OWNER COMMANDS*
+*╎ 4️⃣ - 🛠️ UTILITY COMMANDS*
+*╎ 5️⃣ - 🤖 AI & OTHER COMMANDS*
+*╎*
+*╰───────────────────────*
+
+💡 *Type the category number!*
+Example: \`1\` for Download Commands
+
+🔗 Web: https://nimsara-official.vercel.app/
+*🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
+
+> _MADE BY NIMSARA_
+`;
+
+            await reply({
+                image: { url: BOT_IMAGE_URL },
+                caption: mainMenu.trim()
+            });
+            return;
+        }
+
+        // ==========================================
         // 🔥 FIXED: Auto-reply with better anti-loop protection
         // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off';
@@ -286,10 +518,8 @@ function setupCommandHandlers(socket, number) {
             if (shouldAutoReply) {
                 const textLower = body.toLowerCase().trim();
                 
-                // 🔥 STRONGER ANTI-LOOP: Check if message is from bot itself
                 const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
                 
-                // Check if message contains bot responses
                 const botResponsePatterns = [
                     'hi! 👋', 'mokuth na innwa', 'good morning🌤️', 'good night✨',
                     'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
@@ -298,12 +528,10 @@ function setupCommandHandlers(socket, number) {
                 
                 const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
                 
-                // Skip if from bot or contains bot response
                 if (isFromBot || isBotResponse) {
                     return;
                 }
 
-                // Only match exact keywords to avoid false positives
                 const words = textLower.split(/\s+/);
                 const hasKeyword = (word) => words.some(w => w === word || w.includes(word));
 
@@ -328,44 +556,14 @@ function setupCommandHandlers(socket, number) {
                 } else if (textLower.includes('payment') || textLower.includes('bank') || textLower.includes('ez cash')) {
                     await reply(`*💰Payment Details*
 
-💡Bank - Commercial Bank
-Account number - 8029210301
-Name - G.M.Nethmintha Nimsara Jayasooriya
-Branch - Ampara
+💡Bank - Commercial Bank - 8029210301
+💡Bank - Lolc Bank - 03210014631
+💡Bank - NSB - 109090193739
+💡Bank - Dialog Finance - 001021434294
+💡Bank - Peoples Bank - 015200130082418
 
-💡Bank - Lolc Bank
-Account number - 03210014631
-Name - G.M.Nethmintha Nimsara
-Branch - Ampara1
-
-💡Bank - NSB
-Account number - 109090193739
-Name - G.M.N.N.JAYASURIYA
-Branch - Ampara 2nd
-
-💡Bank - Dialog Finance PLC
-Account number -  001021434294
-Name - Gardiya Manawaduge Nethmintha Nimsara Jayasooriya
-Branch - Head Office
-
-💡Bank - Peoples Bank
-Account number - 015200130082418
-Name - Nethmintha nimsara
-Branch - branch Ampara - 015
-
-
-*🪄EZ CASH*
-
-0740532742
-
-*Ez Cash දාද්දි වැඩියෙන් rs.20 දාන්න*
-
-*🪙 BINANCE*
-
-id - 842717887
-
-
-*\`Thankyou !\`*`);
+*🪄EZ CASH* - 0740532742
+*🪙 BINANCE* - id: 842717887`);
                 } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
                     try {
                         const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
@@ -413,30 +611,69 @@ id - 842717887
                 case 'remsg':
                 case 'delete':
                 case 'getdel': {
-                    const lastDeleted = deletedMessages.get(sender);
+                    let lastDeleted = deletedMessages.get(sender);
+                    
                     if (!lastDeleted) {
-                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ!');
+                        for (const [chatId, deleted] of deletedMessages) {
+                            if (chatId === sender || chatId.includes(sender.split('@')[0])) {
+                                lastDeleted = deleted;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!lastDeleted) {
+                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ! 😔\n\n💡 *Tip:* Messages are cached for 5 minutes after deletion.');
                         return;
                     }
 
-                    // Check if deleted message is from current chat
                     const senderJid = lastDeleted.sender;
                     const senderName = senderJid.split('@')[0];
+                    const time = lastDeleted.time;
+                    let originalText = lastDeleted.text;
+                    let quotedMsg = null;
+
+                    if (lastDeleted.originalMsg) {
+                        quotedMsg = lastDeleted.originalMsg;
+                    }
 
                     const recoverText = `
-🗑️ *DELETED MESSAGE RECOVERED* 🗑️
+╭─❖ *🗑️ DELETED MESSAGE RECOVERED* ❖─╮
+│
+│ 👤 *Sender:* @${senderName}
+│ ⏰ *Time:* ${time}
+│ 💬 *Message:*
+│
+│ ${originalText}
+│
+╰─────────────────────────❖
 
-👤 *Sender:* @${senderName}
-⏰ *Time:* ${lastDeleted.time}
-💬 *Message:* ${lastDeleted.text}
-
-> _Recovered using NIM BOT Anti-Delete_
+> _Recovered using NIM BOT Anti-Delete System_
+> _🔗 ${BOT_CHANNEL_LINK}_
 `;
 
-                    await reply({
-                        text: recoverText.trim(),
-                        mentions: [senderJid]
-                    });
+                    try {
+                        await reply({
+                            text: recoverText.trim(),
+                            mentions: [senderJid]
+                        });
+
+                        if (quotedMsg) {
+                            try {
+                                await reply(`📌 *Original message quoted above*`, quotedMsg);
+                            } catch (e) {}
+                        }
+
+                        setTimeout(() => {
+                            if (deletedMessages.get(sender) === lastDeleted) {
+                                deletedMessages.delete(sender);
+                            }
+                        }, 300000);
+
+                    } catch (e) {
+                        console.error("Error sending recovered message:", e);
+                        await reply(`❌ Failed to recover message: ${e.message}`);
+                    }
                     break;
                 }
 
@@ -497,7 +734,6 @@ id - 842717887
                         let aiAnswer = null;
                         let errorMsg = null;
 
-                        // API 1: BK9 Gemini
                         try {
                             const apiUrl = `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`;
                             const apiRes = await axios.get(apiUrl, { timeout: 15000 });
@@ -507,7 +743,6 @@ id - 842717887
                             console.log("BK9 API failed, trying fallback...");
                         }
 
-                        // API 2: AffiliatePlus
                         if (!aiAnswer) {
                             try {
                                 const fallbackUrl = `https://api.affiliateplus.xyz/api/gpt?query=${encodeURIComponent(query)}`;
@@ -519,7 +754,6 @@ id - 842717887
                             }
                         }
 
-                        // API 3: Delirius
                         if (!aiAnswer) {
                             try {
                                 const thirdUrl = `https://delirius-apiofc.vercel.app/ai/gpt4?q=${encodeURIComponent(query)}`;
@@ -531,7 +765,6 @@ id - 842717887
                             }
                         }
 
-                        // API 4: Another fallback
                         if (!aiAnswer) {
                             try {
                                 const fourthUrl = `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`;
@@ -578,9 +811,7 @@ ${aiAnswer.trim()}
                         await reply(`🎵 Found: *${video.title}*\n📥 Generating audio...`);
 
                         let audioUrl = null;
-                        let usedFallback = false;
 
-                        // Try 1: yt-dlp
                         try {
                             const { stdout } = await execPromise(
                                 `yt-dlp --get-url -f bestaudio "${video.url}"`
@@ -589,10 +820,8 @@ ${aiAnswer.trim()}
                             if (audioUrl) console.log("yt-dlp succeeded for song");
                         } catch (e) {
                             console.log("yt-dlp failed, trying fallback...");
-                            usedFallback = true;
                         }
 
-                        // Fallback: ytdl-core
                         if (!audioUrl) {
                             try {
                                 const ytdl = require('@distube/ytdl-core');
@@ -649,7 +878,6 @@ ${aiAnswer.trim()}
                     try {
                         let videoUrl = null;
 
-                        // Try 1: yt-dlp
                         try {
                             const { stdout } = await execPromise(
                                 `yt-dlp --get-url "${url}"`
@@ -660,7 +888,6 @@ ${aiAnswer.trim()}
                             console.log("yt-dlp failed for TikTok, trying API...");
                         }
 
-                        // Fallback: Public API
                         if (!videoUrl) {
                             try {
                                 const apiUrl = `https://api.vevioz.com/api/button/tiktok/${encodeURIComponent(url)}`;
@@ -705,7 +932,6 @@ ${aiAnswer.trim()}
 
                         let mediaUrl = null;
 
-                        // Try 1: yt-dlp
                         try {
                             let cmd;
                             if (type === 'audio') {
@@ -720,7 +946,6 @@ ${aiAnswer.trim()}
                             console.log("yt-dlp failed for YouTube, trying fallback...");
                         }
 
-                        // Fallback: ytdl-core
                         if (!mediaUrl) {
                             try {
                                 const ytdl = require('@distube/ytdl-core');
@@ -779,7 +1004,6 @@ ${aiAnswer.trim()}
                     try {
                         let videoUrl = null;
 
-                        // Try 1: yt-dlp
                         try {
                             const { stdout } = await execPromise(
                                 `yt-dlp --get-url "${url}"`
@@ -790,7 +1014,6 @@ ${aiAnswer.trim()}
                             console.log("yt-dlp failed for Facebook, trying API...");
                         }
 
-                        // Fallback: Public API
                         if (!videoUrl) {
                             try {
                                 const apiUrl = `https://api.vevioz.com/api/button/facebook/${encodeURIComponent(url)}`;
@@ -865,7 +1088,7 @@ ${aiAnswer.trim()}
                 }
 
                 // ==========================================
-                // 🔥 MENU command
+                // 🔥 MAIN MENU COMMAND
                 // ==========================================
                 case 'allmenu':
                 case 'menu':
@@ -894,68 +1117,20 @@ ${aiAnswer.trim()}
 > Bot Creator : NIMSARA
 ─────────────────────  
 
-*╭─\`💠 𝗕𝗢𝗧 𝗠𝗘𝗡𝗨...\`┈⊷*
+*╭─\`💠 𝗕𝗢𝗧 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┈⊷*
 *╎*
-*╎📍ᴄᴍᴅ - .alive*
-*╎🔖 ᴅᴇꜱᴄ- Show bot status.*
+*╎ 1️⃣ - 📥 DOWNLOAD COMMANDS*
+*╎ 2️⃣ - ⚙️ SETTINGS COMMANDS*
+*╎ 3️⃣ - 👑 OWNER COMMANDS*
+*╎ 4️⃣ - 🛠️ UTILITY COMMANDS*
+*╎ 5️⃣ - 🤖 AI & OTHER COMMANDS*
 *╎*
-*╎📍ᴄᴍᴅ - .status*
-*╎🔖 ᴅᴇꜱᴄ- Check bot status.*
-*╎*
-*╎📍ᴄᴍᴅ - .ping*
-*╎🔖 ᴅᴇꜱᴄ- Check response time.*
-*╎*
-*╎📍ᴄᴍᴅ - .runtime*
-*╎🔖 ᴅᴇꜱᴄ- Show bot uptime.*
-*╎*
-*╎📍ᴄᴍᴅ - .settings*
-*╎🔖 ᴅᴇꜱᴄ- Manage bot settings.*
-*╎*
-*╎📍ᴄᴍᴅ - .setprefix*
-*╎🔖 ᴅᴇꜱᴄ- Change command prefix.*
-*╎*
-*╎📍ᴄᴍᴅ - .send*
-*╎🔖 ᴅᴇꜱᴄ- Download/Save quoted media.*
-*╎*
-*╎📍ᴄᴍᴅ - .mode public/group/inbox/private*
-*╎🔖 ᴅᴇꜱᴄ- Bot Run Mode.*
-*╎*
-*╎📍ᴄᴍᴅ - .autoread all/cmd/off*
-*╎🔖 ᴅᴇꜱᴄ- Auto Read Messages.*
-*╎*
-*╎📍ᴄᴍᴅ - .vv*
-*╎🔖 ᴅᴇꜱᴄ- Download View Once media.*
-*╎*
-*╎📍ᴄᴍᴅ - .jid*
-*╎🔖 ᴅᴇꜱᴄ- Get JID info.*
-*╎*
-*╎📍ᴄᴍᴅ - .owner*
-*╎🔖 ᴅᴇꜱᴄ- Bot owner info.*
-*╎*
-*╎📍ᴄᴍᴅ - .remsg*
-*╎🔖 ᴅᴇꜱᴄ- Recover deleted message.*
-*╎*
-*╎📍ᴄᴍᴅ - .song*
-*╎🔖 ᴅᴇꜱᴄ- Download songs.*
-*╎*
-*╎📍ᴄᴍᴅ - .tt / .tiktok*
-*╎🔖 ᴅᴇꜱᴄ- Download TikTok videos.*
-*╎*
-*╎📍ᴄᴍᴅ - .yt / .youtube*
-*╎🔖 ᴅᴇꜱᴄ- Download YouTube videos/audio.*
-*╎*
-*╎📍ᴄᴍᴅ - .fb / .facebook*
-*╎🔖 ᴅᴇꜱᴄ- Download Facebook videos.*
-*╎*
-*╎📍ᴄᴍᴅ - .ai / .gpt*
-*╎🔖 ᴅᴇꜱᴄ- AI Chatbot.*
-*╎*
-*╎📍ᴄᴍᴅ - .tourl / .url*
-*╎🔖 ᴅᴇꜱᴄ- Convert media to URL.*
 *╰───────────────────────*
 
-🔗 Web: https://nimsara-official.vercel.app/
+💡 *Type the category number to view commands!*
+Example: \`1\` for Download Commands
 
+🔗 Web: https://nimsara-official.vercel.app/
 *🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _MADE BY NIMSARA_
@@ -980,7 +1155,7 @@ ${aiAnswer.trim()}
                 }
 
                 // ==========================================
-                // 🔥 OTHER COMMANDS (mode, ping, autoread, etc.)
+                // 🔥 OTHER COMMANDS
                 // ==========================================
                 case 'mode': {
                     if (!msg.key.fromMe) {
