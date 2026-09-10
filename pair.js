@@ -44,6 +44,10 @@ const reconnectAttempts = new Map();
 const userCategoryState = new Map();
 const menuMessageIds = new Map();
 
+// 🔥 Per-group settings (in-memory, restored from DB)
+const groupAntiLink = new Map();   // { groupJid: 'on'|'off' }
+const groupWelcome = new Map();    // { groupJid: 'on'|'off' }
+
 // ==========================================
 // Get message body
 // ==========================================
@@ -175,8 +179,6 @@ function setupCommandHandlers(socket, number) {
                             keyId: revokedId,
                             timestamp: Date.now()
                         });
-
-                        console.log(`[ANTI-DELETE] Captured from: ${senderJid}`);
                     }
                 }
             }
@@ -192,9 +194,9 @@ function setupCommandHandlers(socket, number) {
             messageCache.set(msg.key.id, msg);
             if (msg.key.stanzaId) messageCache.set(msg.key.stanzaId, msg);
             
-            if (messageCache.size > 1000) {
+            if (messageCache.size > 500) {
                 const keys = messageCache.keys();
-                for (let i = 0; i < 500; i++) {
+                for (let i = 0; i < 250; i++) {
                     const key = keys.next().value;
                     if (key) messageCache.delete(key);
                 }
@@ -227,7 +229,8 @@ function setupCommandHandlers(socket, number) {
             }
         };
 
-        const reply = async (content, quotedMsg = msg) => {
+        // Reply with auto-react on command
+        const reply = async (content, quotedMsg = msg, reactEmoji = true) => {
             let messagePayload;
             if (typeof content === 'string') {
                 messagePayload = { text: content, contextInfo: channelInfo };
@@ -237,8 +240,63 @@ function setupCommandHandlers(socket, number) {
                     contextInfo: { ...(content.contextInfo || {}), ...channelInfo }
                 };
             }
-            return await socket.sendMessage(sender, messagePayload, { quoted: quotedMsg });
+            
+            const sentMsg = await socket.sendMessage(sender, messagePayload, { quoted: quotedMsg });
+
+            // 🔥 Auto-react only if this is a command reply
+            if (reactEmoji && isCommand) {
+                try {
+                    const emojis = ['✅', '👍', '🎯', '⚡', '🔥', '💫', '✨'];
+                    const emoji = emojis[Math.floor(Math.random() * emojis.length)];
+                    await socket.sendMessage(sender, {
+                        react: { text: emoji, key: msg.key }
+                    });
+                } catch (e) {}
+            }
+
+            return sentMsg;
         };
+
+        // ==========================================
+        // 🔥 Per-Group Anti-Link Check
+        // ==========================================
+        if (sender.endsWith('@g.us') && !msg.key.fromMe) {
+            const currentStatus = groupAntiLink.get(sender);
+            
+            // Load from DB if not in memory
+            if (!currentStatus) {
+                const dbStatus = await get(`ANTILINK_${sender}`, number) || 'off';
+                groupAntiLink.set(sender, dbStatus);
+            }
+            
+            const status = groupAntiLink.get(sender);
+            
+            if (status === 'on') {
+                if (body.match(/chat\.whatsapp\.com|whatsapp\.com\/channel/i)) {
+                    // Check if sender is admin
+                    let isAdmin = false;
+                    try {
+                        const meta = await socket.groupMetadata(sender);
+                        const participant = meta.participants.find(p => p.id === msg.key.participant);
+                        isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+                    } catch (e) {}
+                    
+                    // Don't delete if sender is admin
+                    if (!isAdmin) {
+                        try {
+                            await socket.sendMessage(sender, { delete: msg.key });
+                            await socket.sendMessage(sender, {
+                                text: `🚫 *Link Detected!*\n\n@${(msg.key.participant || '').split('@')[0]} Links are not allowed!` + FOOTER,
+                                mentions: [msg.key.participant]
+                            });
+                            return;
+                        } catch (e) {
+                            console.log("Anti-link error:", e.message);
+                        }
+                    }
+                }
+            }
+        }
 
         // ==========================================
         // MENU REPLY HANDLER
@@ -309,7 +367,6 @@ function setupCommandHandlers(socket, number) {
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
-
                 case 2:
                     categoryMenu = `*╭─\`⚙️ SETTINGS COMMANDS\`┈⊷*
 *╎*
@@ -335,10 +392,10 @@ function setupCommandHandlers(socket, number) {
 *╎    Always online mode*
 *╎*
 *╎ 🔗 .antilink [on/off]*
-*╎    Anti-link protection*
+*╎    Anti-link (per group)*
 *╎*
 *╎ 👋 .welcome [on/off]*
-*╎    Welcome new members*
+*╎    Welcome (per group)*
 *╎*
 *╎ 🔤 .setprefix [prefix]*
 *╎    Change command prefix*
@@ -347,7 +404,6 @@ function setupCommandHandlers(socket, number) {
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
-
                 case 3:
                     categoryMenu = `*╭─\`👑 OWNER COMMANDS\`┈⊷*
 *╎*
@@ -370,7 +426,6 @@ function setupCommandHandlers(socket, number) {
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
-
                 case 4:
                     categoryMenu = `*╭─\`🛠️ UTILITY COMMANDS\`┈⊷*
 *╎*
@@ -416,11 +471,13 @@ function setupCommandHandlers(socket, number) {
 *╎ ✅ .check [number]*
 *╎    Check WhatsApp number*
 *╎*
+*╎ 💰 .crypto [coin]*
+*╎    Crypto prices*
+*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
-
                 case 5:
                     categoryMenu = `*╭─\`🤖 AI & CONVERT COMMANDS\`┈⊷*
 *╎*
@@ -452,7 +509,6 @@ function setupCommandHandlers(socket, number) {
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
-
                 case 6:
                     categoryMenu = `*╭─\`👥 GROUP ADMIN COMMANDS\`┈⊷*
 *╎*
@@ -480,11 +536,13 @@ function setupCommandHandlers(socket, number) {
 *╎ 📊 .poll [Q|opt1|opt2]*
 *╎    Group poll*
 *╎*
+*╎ 📞 .getcontact [invite link]*
+*╎    Send random messages*
+*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
-
                 case 7:
                     categoryMenu = `*╭─\`🎮 FUN COMMANDS\`┈⊷*
 *╎*
@@ -510,7 +568,6 @@ function setupCommandHandlers(socket, number) {
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
-
                 default:
                     return;
             }
@@ -524,13 +581,10 @@ function setupCommandHandlers(socket, number) {
                 menuMessageIds.set(sentMsg.key.id, { type: 'category', num: categoryNum });
             }
             
-            userCategoryState.set(sender, categoryNum);
             return;
         }
 
-        // ==========================================
         // Handle "0" - Back to main menu
-        // ==========================================
         if (!isCommand && body === '0' && isMenuReply) {
             const startTime = socketCreationTime.get(number) || Date.now();
             const uptime = Math.floor((Date.now() - startTime) / 1000);
@@ -583,15 +637,17 @@ Example: Reply \`1\` for Download Commands
             }, { quoted: msg });
             
             if (sentMsg?.key?.id) {
-                menuMessageIds.set(sentMsg.key.id, { type: 'main' });
+                messageIdsSet(sentMsg.key.id);
+            }
+            
+            function messageIdsSet(id) {
+                menuMessageIds.set(id, { type: 'main' });
             }
             
             return;
         }
 
-        // ==========================================
         // Auto-reply
-        // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off';
 
         if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
@@ -615,7 +671,6 @@ Example: Reply \`1\` for Download Commands
                 
                 if (isFromBot || isBotResponse) return;
 
-                // Custom replies
                 global.customReplies = global.customReplies || {};
                 if (global.customReplies[textLower]) {
                     await reply(global.customReplies[textLower] + FOOTER);
@@ -627,7 +682,7 @@ Example: Reply \`1\` for Download Commands
 
                 if (hasKeyword('hi') || hasKeyword('හායි') || hasKeyword('hello')) {
                     await reply('Hi! 👋' + FOOTER);
-                } else if (hasKeyword('mk') || hasKeyword('මොකද කරන්නෙ') || textLower.includes('mokada karanne')) {
+                } else if (hasKeyword('mk') || textLower.includes('mokada karanne')) {
                     await reply('Mokuth Na innwa😊' + FOOTER);
                 } else if (hasKeyword('gm') || textLower.includes('good morning')) {
                     await reply('Good Morning🌤️' + FOOTER);
@@ -724,9 +779,7 @@ id - 842717887
         try {
             switch (command) {
 
-                // ==========================================
                 // Delete message recover
-                // ==========================================
                 case 'remsg':
                 case 'delete':
                 case 'getdel': {
@@ -756,26 +809,16 @@ id - 842717887
 │ 💬 *Message:*
 │ ${lastDeleted.text}
 │
-╰─────────────────────────❖
-
-> _Recovered by ${botName} Anti-Delete_` + FOOTER;
+╰─────────────────────────❖` + FOOTER;
 
                     await reply({
                         text: recoverText.trim(),
                         mentions: [senderJid]
                     });
-
-                    if (lastDeleted.originalMsg) {
-                        try {
-                            await reply(`📌 *Original message*`, lastDeleted.originalMsg);
-                        } catch (e) {}
-                    }
                     break;
                 }
 
-                // ==========================================
                 // JID command
-                // ==========================================
                 case 'jid': {
                     const chatJid = msg.key.remoteJid;
                     const senderJid = msg.key.participant || msg.key.remoteJid;
@@ -787,13 +830,11 @@ id - 842717887
 💬 *Chat JID:* \`${chatJid}\`
 👤 *Sender JID:* \`${senderJid}\`
 🎯 *Quoted JID:* \`${quotedJid}\`
-`.trim() + FOOTER, msg);
+`.trim() + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // AI command
-                // ==========================================
                 case 'ai':
                 case 'gpt': {
                     const query = args.join(' ');
@@ -817,29 +858,16 @@ id - 842717887
 
                         if (!aiAnswer) {
                             try {
-                                const res = await axios.get(`https://delirius-apiofc.vercel.app/ai/gpt4?q=${encodeURIComponent(query)}`, { timeout: 15000 });
-                                aiAnswer = res.data?.data || res.data?.response || res.data?.result;
-                            } catch (e3) {}
-                        }
-
-                        if (!aiAnswer) {
-                            try {
                                 const res = await axios.get(`https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, { timeout: 15000 });
                                 aiAnswer = res.data?.data || res.data?.response || res.data?.result;
-                            } catch (e4) {}
+                            } catch (e3) {}
                         }
 
                         if (!aiAnswer) {
                             return reply(`❌ AI එකෙන් උත්තරයක් ලබාගන්න බැරි වුණා.` + FOOTER);
                         }
 
-                        await reply(`
-🤖 *AI ASSISTANT* 🤖
-
-${aiAnswer.trim()}
-
-🔗 *Channel:* ${BOT_CHANNEL_LINK}
-`.trim() + FOOTER, msg);
+                        await reply(`🤖 *AI ASSISTANT*\n\n${aiAnswer.trim()}` + FOOTER);
 
                     } catch (e) {
                         await reply(`❌ AI Error: ${e.message}` + FOOTER);
@@ -847,12 +875,10 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // SONG command
-                // ==========================================
+                // Song command
                 case 'song': {
                     const query = args.join(' ');
-                    if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike` + FOOTER);
+                    if (!query) return reply(`⚠️ Please provide a song name!` + FOOTER);
 
                     await reply(`🔍 Searching for *${query}*... 🎶` + FOOTER);
                     try {
@@ -884,16 +910,7 @@ ${aiAnswer.trim()}
                             audio: { url: audioUrl },
                             mimetype: 'audio/mpeg',
                             ptt: false,
-                            fileName: `${video.title}.mp3`,
-                            contextInfo: {
-                                externalAdReply: {
-                                    title: video.title,
-                                    body: `Duration: ${video.timestamp}`,
-                                    thumbnailUrl: video.thumbnail,
-                                    sourceUrl: video.url,
-                                    mediaType: 1
-                                }
-                            }
+                            fileName: `${video.title}.mp3`
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -902,14 +919,12 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // TIKTOK command
-                // ==========================================
+                // TikTok
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
                     if (!url || !url.includes('tiktok.com')) {
-                        return reply(`⚠️ Please provide a TikTok link!\nExample: .tt https://vt.tiktok.com/xxxx/` + FOOTER);
+                        return reply(`⚠️ Please provide a TikTok link!` + FOOTER);
                     }
 
                     await reply(`📥 Processing TikTok... ⏳` + FOOTER);
@@ -932,7 +947,7 @@ ${aiAnswer.trim()}
 
                         await socket.sendMessage(sender, {
                             video: { url: videoUrl },
-                            caption: `🎬 *TikTok Video*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER
+                            caption: `🎬 *TikTok Video*` + FOOTER
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -941,9 +956,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // YOUTUBE command
-                // ==========================================
+                // YouTube
                 case 'yt':
                 case 'youtube': {
                     const url = args[0];
@@ -987,7 +1000,7 @@ ${aiAnswer.trim()}
                         } else {
                             await socket.sendMessage(sender, {
                                 video: { url: mediaUrl },
-                                caption: `🎬 *YouTube Video*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER
+                                caption: `🎬 *YouTube Video*` + FOOTER
                             }, { quoted: msg });
                         }
                     } catch (e) {
@@ -996,9 +1009,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // FACEBOOK command
-                // ==========================================
+                // Facebook
                 case 'fb':
                 case 'facebook': {
                     const url = args[0];
@@ -1026,7 +1037,7 @@ ${aiAnswer.trim()}
 
                         await socket.sendMessage(sender, {
                             video: { url: videoUrl },
-                            caption: `🎬 *Facebook Video*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER
+                            caption: `🎬 *Facebook Video*` + FOOTER
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -1035,9 +1046,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // INSTAGRAM command
-                // ==========================================
+                // Instagram
                 case 'ig':
                 case 'instagram': {
                     const url = args[0];
@@ -1055,12 +1064,12 @@ ${aiAnswer.trim()}
                                 if (media.type === 'video' || (media.url && media.url.includes('.mp4'))) {
                                     await socket.sendMessage(sender, {
                                         video: { url: media.url },
-                                        caption: `📸 *Instagram Video*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER
+                                        caption: `📸 *Instagram Video*` + FOOTER
                                     }, { quoted: msg });
                                 } else {
                                     await socket.sendMessage(sender, {
                                         image: { url: media.url },
-                                        caption: `📸 *Instagram Image*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER
+                                        caption: `📸 *Instagram Image*` + FOOTER
                                     }, { quoted: msg });
                                 }
                             }
@@ -1073,9 +1082,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // TOURL command
-                // ==========================================
+                // ToURL
                 case 'tourl':
                 case 'url': {
                     try {
@@ -1101,13 +1108,7 @@ ${aiAnswer.trim()}
                         });
 
                         if (uploadRes.data && uploadRes.data.startsWith('http')) {
-                            await reply(`
-🔗 *MEDIA URL GENERATED* 🔗
-
-*Direct Link:* ${uploadRes.data.trim()}
-
-🔗 *Channel:* ${BOT_CHANNEL_LINK}
-`.trim() + FOOTER, msg);
+                            await reply(`🔗 *MEDIA URL*\n\n*Direct Link:* ${uploadRes.data.trim()}` + FOOTER);
                         } else {
                             return reply(`❌ Upload failed.` + FOOTER);
                         }
@@ -1118,9 +1119,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // TRANSLATE command
-                // ==========================================
+                // Translate
                 case 'tr':
                 case 'translate': {
                     const targetLang = args[0] || 'si';
@@ -1136,7 +1135,7 @@ ${aiAnswer.trim()}
                     }
                     
                     if (!textToTranslate) {
-                        return reply(`⚠️ Usage: .tr [lang] [text]\nOR reply to a message with .tr [lang]\n\nLanguages: si, ta, en, hi, fr, de, ja, ko, zh` + FOOTER);
+                        return reply(`⚠️ Usage: .tr [lang] [text]\nOR reply to a message with .tr [lang]` + FOOTER);
                     }
                     
                     try {
@@ -1150,9 +1149,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // STICKER command
-                // ==========================================
+                // Sticker
                 case 'sticker':
                 case 's': {
                     try {
@@ -1190,9 +1187,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // QR CODE command
-                // ==========================================
+                // QR Code
                 case 'qr':
                 case 'qrcode': {
                     const text = args.join(' ');
@@ -1203,7 +1198,7 @@ ${aiAnswer.trim()}
                         
                         await socket.sendMessage(sender, {
                             image: { url: qrUrl },
-                            caption: `📱 *QR Code Generated*\n\n📝 Content: ${text}` + FOOTER
+                            caption: `📱 *QR Code*\n\n📝 Content: ${text}` + FOOTER
                         }, { quoted: msg });
                     } catch (e) {
                         await reply(`❌ QR failed: ${e.message}` + FOOTER);
@@ -1211,12 +1206,10 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // WEATHER command
-                // ==========================================
+                // Weather
                 case 'weather': {
                     const city = args.join(' ');
-                    if (!city) return reply(`⚠️ Usage: .weather [city]\nExample: .weather Colombo` + FOOTER);
+                    if (!city) return reply(`⚠️ Usage: .weather [city]` + FOOTER);
                     
                     try {
                         const res = await axios.get(`https://wttr.in/${encodeURIComponent(city)}?format=j1`, { timeout: 15000 });
@@ -1225,32 +1218,25 @@ ${aiAnswer.trim()}
                         const current = data.current_condition[0];
                         const area = data.nearest_area[0];
                         
-                        const weatherText = `
-🌤️ *WEATHER REPORT*
+                        await reply(`🌤️ *WEATHER REPORT*
 
 📍 *City:* ${area.areaName[0].value}
 🌍 *Country:* ${area.country[0].value}
-🌡️ *Temp:* ${current.temp_C}°C (Feels like ${current.FeelsLikeC}°C)
+🌡️ *Temp:* ${current.temp_C}°C
 ☁️ *Condition:* ${current.weatherDesc[0].value}
 💧 *Humidity:* ${current.humidity}%
-💨 *Wind:* ${current.windspeedKmph} km/h
-👁️ *Visibility:* ${current.visibility} km
-`.trim() + FOOTER;
-                        
-                        await reply(weatherText);
+💨 *Wind:* ${current.windspeedKmph} km/h` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Weather failed! Check city name.` + FOOTER);
+                        await reply(`❌ Weather failed!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // PASSWORD command
-                // ==========================================
+                // Password
                 case 'password':
                 case 'genpass': {
                     const length = parseInt(args[0]) || 16;
-                    if (length < 4 || length > 64) return reply(`⚠️ Length must be 4-64!` + FOOTER);
+                    if (length < 4 || length > 64) return reply(`⚠️ Length 4-64!` + FOOTER);
                     
                     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=';
                     let password = '';
@@ -1259,13 +1245,11 @@ ${aiAnswer.trim()}
                         password += chars.charAt(Math.floor(Math.random() * chars.length));
                     }
                     
-                    await reply(`🔐 *PASSWORD GENERATED*\n\n\`${password}\`\n\n📏 Length: ${length}\n⚠️ Save it safely!` + FOOTER);
+                    await reply(`🔐 *PASSWORD*\n\n\`${password}\`\n\n📏 Length: ${length}` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // SHORT URL command
-                // ==========================================
+                // Short URL
                 case 'short':
                 case 'shorturl': {
                     const url = args[0];
@@ -1275,14 +1259,12 @@ ${aiAnswer.trim()}
                         const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`, { timeout: 10000 });
                         await reply(`🔗 *SHORT URL*\n\n📎 *Original:* ${url}\n✂️ *Short:* ${res.data}` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Short URL failed!` + FOOTER);
+                        await reply(`❌ Failed!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // SCREENSHOT command
-                // ==========================================
+                // Screenshot
                 case 'screenshot':
                 case 'ss': {
                     const url = args[0];
@@ -1293,30 +1275,26 @@ ${aiAnswer.trim()}
                         
                         await socket.sendMessage(sender, {
                             image: { url: ssUrl },
-                            caption: `📸 *Screenshot of ${url}*` + FOOTER
+                            caption: `📸 *Screenshot*` + FOOTER
                         }, { quoted: msg });
                     } catch (e) {
-                        await reply(`❌ Screenshot failed!` + FOOTER);
+                        await reply(`❌ Failed!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // TIME/DATE command
-                // ==========================================
+                // Time/Date
                 case 'time':
                 case 'date': {
                     const now = new Date();
                     const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Colombo', hour12: true });
                     const dateStr = now.toLocaleDateString('en-US', { timeZone: 'Asia/Colombo', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
                     
-                    await reply(`🕐 *DATE & TIME*\n\n📅 *Date:* ${dateStr}\n⏰ *Time:* ${timeStr}\n🌍 *Timezone:* Sri Lanka (IST)` + FOOTER);
+                    await reply(`🕐 *DATE & TIME*\n\n📅 *Date:* ${dateStr}\n⏰ *Time:* ${timeStr}\n🌍 *Timezone:* Sri Lanka` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // WHOIS/USERINFO command
-                // ==========================================
+                // Whois
                 case 'whois':
                 case 'userinfo': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
@@ -1326,14 +1304,12 @@ ${aiAnswer.trim()}
                         const ppUrl = await socket.profilePictureUrl(targetJid, 'image').catch(() => null);
                         const status = await socket.fetchStatus(targetJid).catch(() => null);
                         
-                        const infoText = `
-👤 *USER INFORMATION*
+                        const infoText = `👤 *USER INFORMATION*
 
 📱 *Number:* ${targetJid.split('@')[0]}
 🆔 *JID:* \`${targetJid}\`
 💭 *Status:* ${status?.status || 'Hidden'}
-🖼️ *Profile Pic:* ${ppUrl ? 'Visible' : 'Hidden'}
-`.trim() + FOOTER;
+🖼️ *Profile Pic:* ${ppUrl ? 'Visible' : 'Hidden'}` + FOOTER;
                         
                         if (ppUrl) {
                             await socket.sendMessage(sender, {
@@ -1349,9 +1325,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // FAKECHAT command
-                // ==========================================
+                // FakeChat (FIXED)
                 case 'fakechat': {
                     const text = args.join(' ');
                     if (!text || !text.includes('|')) {
@@ -1374,9 +1348,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // TAGALL command
-                // ==========================================
+                // TAGALL
                 case 'tagall':
                 case 'all': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
@@ -1404,9 +1376,52 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // KICK command
-                // ==========================================
+                // GETCONTACT (NEW) - Send random messages to group members
+                case 'getcontact':
+                case 'gc': {
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
+                    
+                    try {
+                        const meta = await socket.groupMetadata(sender);
+                        const botJid = socket.user.id.split(':')[0] + '@s.whatsapp.net';
+                        
+                        // Get members except bot and owner
+                        const members = meta.participants
+                            .filter(p => p.id !== botJid && p.id !== msg.key.participant)
+                            .map(p => p.id);
+                        
+                        if (members.length === 0) {
+                            return reply(`❌ No members to message!` + FOOTER);
+                        }
+                        
+                        await reply(`📞 Sending random messages to ${members.length} members...` + FOOTER);
+                        
+                        const messages = ['Hi 👋', 'Hello 👋', 'Mk 😊'];
+                        let sent = 0;
+                        
+                        for (const memberJid of members) {
+                            try {
+                                const randomMsg = messages[Math.floor(Math.random() * messages.length)];
+                                await socket.sendMessage(memberJid, {
+                                    text: randomMsg + FOOTER
+                                });
+                                sent++;
+                                await delay(1500);
+                            } catch (e) {
+                                console.log(`Failed to send to ${memberJid}:`, e.message);
+                            }
+                        }
+                        
+                        await reply(`✅ Sent messages to *${sent}/${members.length}* members!` + FOOTER);
+                        
+                    } catch (e) {
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // KICK
                 case 'kick': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
@@ -1417,14 +1432,12 @@ ${aiAnswer.trim()}
                         await socket.groupParticipantsUpdate(sender, [quoted.participant], 'remove');
                         await reply(`✅ User kicked!` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Kick failed: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // PROMOTE command
-                // ==========================================
+                // PROMOTE
                 case 'promote': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
@@ -1433,16 +1446,14 @@ ${aiAnswer.trim()}
                     
                     try {
                         await socket.groupParticipantsUpdate(sender, [quoted.participant], 'promote');
-                        await reply(`✅ User promoted to admin!` + FOOTER);
+                        await reply(`✅ User promoted!` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Promote failed: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // DEMOTE command
-                // ==========================================
+                // DEMOTE
                 case 'demote': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
@@ -1453,29 +1464,25 @@ ${aiAnswer.trim()}
                         await socket.groupParticipantsUpdate(sender, [quoted.participant], 'demote');
                         await reply(`✅ User demoted!` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Demote failed: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // MUTE command
-                // ==========================================
+                // MUTE
                 case 'mute': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
                     try {
                         await socket.groupSettingUpdate(sender, 'announcement');
-                        await reply(`🔇 Group muted! Only admins can send.` + FOOTER);
+                        await reply(`🔇 Group muted!` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Mute failed: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // UNMUTE command
-                // ==========================================
+                // UNMUTE
                 case 'unmute': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
@@ -1483,14 +1490,12 @@ ${aiAnswer.trim()}
                         await socket.groupSettingUpdate(sender, 'not_announcement');
                         await reply(`🔊 Group unmuted!` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Unmute failed: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // GROUP INFO command
-                // ==========================================
+                // GROUP INFO
                 case 'ginfo':
                 case 'groupinfo': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
@@ -1502,16 +1507,14 @@ ${aiAnswer.trim()}
                         let ppUrl = null;
                         try { ppUrl = await socket.profilePictureUrl(sender, 'image'); } catch (e) {}
                         
-                        const infoText = `
-📊 *GROUP INFORMATION*
+                        const infoText = `📊 *GROUP INFORMATION*
 
 📝 *Name:* ${meta.subject}
 🆔 *JID:* \`${meta.id}\`
 👥 *Members:* ${meta.participants.length}
 👑 *Admins:* ${admins.length}
 📅 *Created:* ${new Date(meta.creation * 1000).toLocaleDateString()}
-📝 *Description:* ${meta.desc || 'No description'}
-`.trim() + FOOTER;
+📝 *Desc:* ${meta.desc || 'No description'}` + FOOTER;
                         
                         if (ppUrl) {
                             await socket.sendMessage(sender, {
@@ -1527,9 +1530,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // QUOTE command
-                // ==========================================
+                // QUOTE
                 case 'quote': {
                     const quotes = [
                         "The only way to do great work is to love what you do. - Steve Jobs",
@@ -1547,18 +1548,14 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // DICE command
-                // ==========================================
+                // DICE
                 case 'dice': {
                     const dice = Math.floor(Math.random() * 6) + 1;
                     await reply(`🎲 *DICE ROLL*\n\nYou got: *${dice}*` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // FLIP COIN command
-                // ==========================================
+                // FLIP
                 case 'flip':
                 case 'coin': {
                     const result = Math.random() < 0.5 ? 'Heads 🪙' : 'Tails 🪙';
@@ -1566,9 +1563,7 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // JOKE command
-                // ==========================================
+                // JOKE
                 case 'joke': {
                     try {
                         const res = await axios.get('https://official-joke-api.appspot.com/random_joke', { timeout: 10000 });
@@ -1577,33 +1572,26 @@ ${aiAnswer.trim()}
                         const jokes = [
                             "Why don't scientists trust atoms? Because they make up everything!",
                             "What do you call a fake noodle? An impasta!",
-                            "Why did the scarecrow win an award? He was outstanding in his field!",
-                            "I told my wife she was drawing her eyebrows too high. She looked surprised."
+                            "Why did the scarecrow win an award? He was outstanding in his field!"
                         ];
                         await reply(`😂 *JOKE*\n\n${jokes[Math.floor(Math.random() * jokes.length)]}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // SINHALA JOKE command
-                // ==========================================
+                // SINHALA JOKE
                 case 'sijoke': {
                     const sijokes = [
                         "මිනිහෙක් බස් එකේ ගිහින් කොන්දොස්තරට කිව්වා 'ටිකට් එකක් දෙන්න' කියලා. කොන්දොස්තර කිව්වා 'කොහෙද යන්නේ?' මිනිහා කිව්වා 'ඔයාගේ ගෙදර' කියලා 😂",
                         "ගුරුවරයා: 'උඹ මොකද මේ පන්තියට එන්නේ නැත්තේ?' ළමයා: 'සර් මම එනවා, ඒත් ගෙදර මාව නවත්තනවා' 😅",
-                        "එක මිනිහෙක් ඩොක්ටර්ට කිව්වා 'මට කන්න බෑ' කියලා. ඩොක්ටර් කිව්වා 'මොකද?' මිනිහා කිව්වා 'කට ඇරියම කන්න පුළුවන්' කියලා 🤣",
-                        "අම්මා: 'උඹ ඉගෙන ගන්නේ නැතුව මොකද කරන්නේ?' ළමයා: 'මම ඉගෙන ගන්නවා අම්මේ, ඒත් පොතේ ඉගෙන ගන්නේ නෑ' 😂"
+                        "එක මිනිහෙක් ඩොක්ටර්ට කිව්වා 'මට කන්න බෑ' කියලා. ඩොක්ටර් කිව්වා 'මොකද?' මිනිහා කිව්වා 'කට ඇරියම කන්න පුළුවන්' කියලා 🤣"
                     ];
                     
-                    const randomJoke = sijokes[Math.floor(Math.random() * sijokes.length)];
-                    await reply(`😂 *සිංහල ජෝක්*\n\n${randomJoke}` + FOOTER);
+                    await reply(`😂 *සිංහල ජෝක්*\n\n${sijokes[Math.floor(Math.random() * sijokes.length)]}` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // RANDOM NUMBER command
-                // ==========================================
+                // RANDOM
                 case 'random': {
                     const min = parseInt(args[0]) || 1;
                     const max = parseInt(args[1]) || 100;
@@ -1612,42 +1600,31 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ==========================================
-                // IP LOOKUP command
-                // ==========================================
+                // IP LOOKUP
                 case 'ip': {
                     const target = args[0];
-                    if (!target) return reply(`⚠️ Usage: .ip [IP or domain]\nExample: .ip google.com` + FOOTER);
+                    if (!target) return reply(`⚠️ Usage: .ip [domain]` + FOOTER);
                     
                     try {
                         const res = await axios.get(`http://ip-api.com/json/${target}`, { timeout: 10000 });
                         const data = res.data;
                         
-                        if (data.status !== 'success') {
-                            return reply(`❌ Lookup failed: ${data.message}` + FOOTER);
-                        }
+                        if (data.status !== 'success') return reply(`❌ Lookup failed!` + FOOTER);
                         
-                        await reply(`🌐 *IP INFORMATION*
+                        await reply(`🌐 *IP INFO*
 
 📍 *Target:* ${target}
-🌍 *Country:* ${data.country} (${data.countryCode})
+🌍 *Country:* ${data.country}
 🏙️ *City:* ${data.city}
-📮 *ZIP:* ${data.zip}
-🗺️ *Region:* ${data.regionName}
-📌 *Latitude:* ${data.lat}
-📌 *Longitude:* ${data.lon}
 🌐 *ISP:* ${data.isp}
-🏢 *Org:* ${data.org}
 🕐 *Timezone:* ${data.timezone}` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // BASE64 command
-                // ==========================================
+                // BASE64
                 case 'base64':
                 case 'b64': {
                     const mode = args[0]?.toLowerCase();
@@ -1660,57 +1637,82 @@ ${aiAnswer.trim()}
                     try {
                         if (mode === 'encode' || mode === 'enc') {
                             const encoded = Buffer.from(text).toString('base64');
-                            await reply(`🔐 *BASE64 ENCODED*\n\n\`${encoded}\`` + FOOTER);
+                            await reply(`🔐 *ENCODED*\n\n\`${encoded}\`` + FOOTER);
                         } else if (mode === 'decode' || mode === 'dec') {
                             const decoded = Buffer.from(text, 'base64').toString('utf8');
-                            await reply(`🔓 *BASE64 DECODED*\n\n${decoded}` + FOOTER);
-                        } else {
-                            await reply(`⚠️ Invalid mode! Use encode or decode` + FOOTER);
+                            await reply(`🔓 *DECODED*\n\n${decoded}` + FOOTER);
                         }
                     } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                        await reply(`❌ Error!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // TTS command
-                // ==========================================
+                // TTS (FIXED)
                 case 'tts':
                 case 'say': {
                     const text = args.join(' ');
-                    if (!text) return reply(`⚠️ Usage: .tts [text]\nExample: .tts Hello everyone` + FOOTER);
+                    if (!text) return reply(`⚠️ Usage: .tts [text]` + FOOTER);
                     
                     try {
                         const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
                         
-                        const response = await axios.get(ttsUrl, { responseType: 'arraybuffer', timeout: 15000 });
+                        const response = await axios.get(ttsUrl, { 
+                            responseType: 'arraybuffer', 
+                            timeout: 15000,
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                            }
+                        });
+                        
                         const audioBuffer = Buffer.from(response.data);
+                        
+                        if (audioBuffer.length < 100) {
+                            return reply(`❌ TTS failed! Try again.` + FOOTER);
+                        }
                         
                         await socket.sendMessage(sender, {
                             audio: audioBuffer,
                             mimetype: 'audio/mpeg',
-                            ptt: true
+                            ptt: true,
+                            fileName: 'tts.mp3'
                         }, { quoted: msg });
+                        
                     } catch (e) {
                         await reply(`❌ TTS failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // CRYPTO PRICE command
-                // ==========================================
+                // CRYPTO (FIXED)
                 case 'crypto':
                 case 'price': {
-                    const coin = args[0]?.toLowerCase();
-                    if (!coin) return reply(`⚠️ Usage: .crypto [coin]\nExample: .crypto bitcoin\n\nAvailable: bitcoin, ethereum, binancecoin, ripple, dogecoin, cardano, solana` + FOOTER);
+                    let coin = args[0]?.toLowerCase();
+                    if (!coin) return reply(`⚠️ Usage: .crypto [coin]\nExample: .crypto btc` + FOOTER);
+                    
+                    // Convert symbols to full names
+                    const coinMap = {
+                        'btc': 'bitcoin',
+                        'eth': 'ethereum',
+                        'bnb': 'binancecoin',
+                        'xrp': 'ripple',
+                        'doge': 'dogecoin',
+                        'ada': 'cardano',
+                        'sol': 'solana',
+                        'matic': 'matic-network',
+                        'dot': 'polkadot',
+                        'ltc': 'litecoin',
+                        'trx': 'tron',
+                        'shib': 'shiba-inu'
+                    };
+                    
+                    if (coinMap[coin]) coin = coinMap[coin];
                     
                     try {
-                        const res = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${coin}&vs_currencies=usd,lkr&include_24hr_change=true`, { timeout: 10000 });
+                        const res = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${coin}&vs_currencies=usd,lkr&include_24hr_change=true`, { timeout: 15000 });
                         const data = res.data[coin];
                         
-                        if (!data) return reply(`❌ Coin not found!` + FOOTER);
+                        if (!data) return reply(`❌ Coin not found! Try: btc, eth, bnb, xrp, doge, ada, sol` + FOOTER);
                         
                         const change = data.usd_24h_change?.toFixed(2) || 0;
                         const emoji = change >= 0 ? '📈' : '📉';
@@ -1719,18 +1721,16 @@ ${aiAnswer.trim()}
 
 💵 *USD:* $${data.usd?.toLocaleString() || 'N/A'}
 🇱🇰 *LKR:* Rs. ${data.lkr?.toLocaleString() || 'N/A'}
-${emoji} *24h Change:* ${change}%
+${emoji} *24h:* ${change}%
 
 > _Powered by CoinGecko_` + FOOTER);
                     } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // URL INFO command
-                // ==========================================
+                // URL INFO
                 case 'urlinfo':
                 case 'preview': {
                     const url = args[0];
@@ -1740,11 +1740,10 @@ ${emoji} *24h Change:* ${change}%
                         const res = await axios.get(`https://api.microlink.io?url=${encodeURIComponent(url)}`, { timeout: 15000 });
                         const data = res.data.data;
                         
-                        let info = `🔗 *URL INFORMATION*\n\n`;
+                        let info = `🔗 *URL INFO*\n\n`;
                         info += `📝 *Title:* ${data.title || 'N/A'}\n`;
-                        info += `📄 *Description:* ${data.description || 'N/A'}\n`;
+                        info += `📄 *Desc:* ${data.description || 'N/A'}\n`;
                         info += `🌐 *Site:* ${data.publisher || 'N/A'}\n`;
-                        info += `🔗 *URL:* ${url}\n`;
                         info += FOOTER;
                         
                         if (data.image?.url) {
@@ -1756,14 +1755,12 @@ ${emoji} *24h Change:* ${change}%
                             await reply(info);
                         }
                     } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // TEXT TO IMAGE command
-                // ==========================================
+                // TEXT TO IMAGE
                 case 'textimg':
                 case 'tim': {
                     const text = args.join(' ');
@@ -1774,21 +1771,19 @@ ${emoji} *24h Change:* ${change}%
                         
                         await socket.sendMessage(sender, {
                             image: { url: imgUrl },
-                            caption: `🎨 *Text Image Generated*` + FOOTER
+                            caption: `🎨 *Text Image*` + FOOTER
                         }, { quoted: msg });
                     } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // CHECK NUMBER command
-                // ==========================================
+                // CHECK NUMBER
                 case 'check':
                 case 'numbercheck': {
                     const phone = args[0];
-                    if (!phone) return reply(`⚠️ Usage: .check [phone]\nExample: .check 94771234567` + FOOTER);
+                    if (!phone) return reply(`⚠️ Usage: .check [phone]` + FOOTER);
                     
                     try {
                         const cleanPhone = phone.replace(/[^0-9]/g, '');
@@ -1800,23 +1795,20 @@ ${emoji} *24h Change:* ${change}%
                             let ppUrl = null;
                             try { ppUrl = await socket.profilePictureUrl(jid, 'image'); } catch (e) {}
                             
-                            await reply(`✅ *NUMBER EXISTS ON WHATSAPP!*
+                            await reply(`✅ *EXISTS ON WHATSAPP!*
 
 📱 *Number:* ${cleanPhone}
-🆔 *JID:* \`${jid}\`
 🖼️ *Profile Pic:* ${ppUrl ? 'Visible' : 'Hidden'}` + FOOTER);
                         } else {
-                            await reply(`❌ This number is NOT on WhatsApp!` + FOOTER);
+                            await reply(`❌ NOT on WhatsApp!` + FOOTER);
                         }
                     } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                        await reply(`❌ Failed!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // SETREPLY command
-                // ==========================================
+                // SETREPLY
                 case 'setreply': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
@@ -1824,19 +1816,17 @@ ${emoji} *24h Change:* ${change}%
                     const response = args.slice(1).join(' ');
                     
                     if (!trigger || !response) {
-                        return reply(`⚠️ Usage: .setreply [trigger] [response]\nExample: .setreply hello Hi there!` + FOOTER);
+                        return reply(`⚠️ Usage: .setreply [trigger] [response]` + FOOTER);
                     }
                     
                     global.customReplies = global.customReplies || {};
                     global.customReplies[trigger] = response;
                     
-                    await reply(`✅ Custom reply set!\n\n🔤 *Trigger:* ${trigger}\n💬 *Response:* ${response}` + FOOTER);
+                    await reply(`✅ Custom reply set!` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // DELREPLY command
-                // ==========================================
+                // DELREPLY
                 case 'delreply': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
@@ -1846,13 +1836,11 @@ ${emoji} *24h Change:* ${change}%
                     global.customReplies = global.customReplies || {};
                     delete global.customReplies[trigger];
                     
-                    await reply(`✅ Removed custom reply: *${trigger}*` + FOOTER);
+                    await reply(`✅ Removed: *${trigger}*` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // LISTREPLY command
-                // ==========================================
+                // LISTREPLY
                 case 'listreply': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
@@ -1860,7 +1848,7 @@ ${emoji} *24h Change:* ${change}%
                     const triggers = Object.keys(global.customReplies);
                     
                     if (triggers.length === 0) {
-                        return reply(`📝 No custom replies set!` + FOOTER);
+                        return reply(`📝 No custom replies!` + FOOTER);
                     }
                     
                     let list = `📝 *CUSTOM REPLIES*\n\n`;
@@ -1872,9 +1860,7 @@ ${emoji} *24h Change:* ${change}%
                     break;
                 }
 
-                // ==========================================
-                // NOTE command
-                // ==========================================
+                // NOTE
                 case 'note': {
                     const action = args[0]?.toLowerCase();
                     const noteName = args[1]?.toLowerCase();
@@ -1883,39 +1869,35 @@ ${emoji} *24h Change:* ${change}%
                     global.notes = global.notes || {};
                     
                     if (action === 'save') {
-                        if (!noteName || !noteContent) {
-                            return reply(`⚠️ Usage: .note save [name] [content]` + FOOTER);
-                        }
+                        if (!noteName || !noteContent) return reply(`⚠️ Usage: .note save [name] [content]` + FOOTER);
                         global.notes[noteName] = noteContent;
                         await reply(`✅ Note saved: *${noteName}*` + FOOTER);
-                    } else if (action === 'get' || action === 'show') {
+                    } else if (action === 'get') {
                         if (!noteName) return reply(`⚠️ Usage: .note get [name]` + FOOTER);
-                        if (!global.notes[noteName]) return reply(`❌ Note not found: *${noteName}*` + FOOTER);
+                        if (!global.notes[noteName]) return reply(`❌ Not found!` + FOOTER);
                         await reply(`📝 *${noteName.toUpperCase()}*\n\n${global.notes[noteName]}` + FOOTER);
                     } else if (action === 'list') {
                         const notes = Object.keys(global.notes);
-                        if (notes.length === 0) return reply(`📝 No notes saved!` + FOOTER);
-                        await reply(`📝 *SAVED NOTES*\n\n${notes.map((n, i) => `${i+1}. ${n}`).join('\n')}` + FOOTER);
-                    } else if (action === 'del' || action === 'delete') {
+                        if (notes.length === 0) return reply(`📝 No notes!` + FOOTER);
+                        await reply(`📝 *NOTES*\n\n${notes.map((n, i) => `${i+1}. ${n}`).join('\n')}` + FOOTER);
+                    } else if (action === 'del') {
                         if (!noteName) return reply(`⚠️ Usage: .note del [name]` + FOOTER);
                         delete global.notes[noteName];
-                        await reply(`✅ Note deleted: *${noteName}*` + FOOTER);
+                        await reply(`✅ Deleted: *${noteName}*` + FOOTER);
                     } else {
                         await reply(`📝 *Note Commands*\n\n.note save [name] [content]\n.note get [name]\n.note list\n.note del [name]` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // REMIND command
-                // ==========================================
+                // REMIND
                 case 'remind':
                 case 'reminder': {
                     const timeArg = args[0];
                     const reminderText = args.slice(1).join(' ');
                     
                     if (!timeArg || !reminderText) {
-                        return reply(`⚠️ Usage: .remind [time] [message]\nExample: .remind 5m Take medicine\n\nTime: 10s, 5m, 1h` + FOOTER);
+                        return reply(`⚠️ Usage: .remind [time] [message]\nExample: .remind 5m Take medicine` + FOOTER);
                     }
                     
                     let ms = 0;
@@ -1928,7 +1910,7 @@ ${emoji} *24h Change:* ${change}%
                         return reply(`⚠️ Invalid time! Max 24h` + FOOTER);
                     }
                     
-                    await reply(`⏰ Reminder set for ${timeArg}!\n\n📝 "${reminderText}"` + FOOTER);
+                    await reply(`⏰ Reminder set for ${timeArg}!` + FOOTER);
                     
                     setTimeout(async () => {
                         try {
@@ -1941,22 +1923,20 @@ ${emoji} *24h Change:* ${change}%
                     break;
                 }
 
-                // ==========================================
-                // POLL command
-                // ==========================================
+                // POLL
                 case 'poll': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
                     const pollText = args.join(' ');
                     if (!pollText.includes('|')) {
-                        return reply(`⚠️ Usage: .poll Question|Option1|Option2|Option3\nExample: .poll Best color?|Red|Blue|Green` + FOOTER);
+                        return reply(`⚠️ Usage: .poll Question|Option1|Option2` + FOOTER);
                     }
                     
                     const parts = pollText.split('|');
                     const question = parts[0];
                     const options = parts.slice(1);
                     
-                    if (options.length < 2) return reply(`⚠️ At least 2 options needed!` + FOOTER);
+                    if (options.length < 2) return reply(`⚠️ At least 2 options!` + FOOTER);
                     
                     let pollMsg = `📊 *POLL*\n\n❓ *${question}*\n\n`;
                     options.forEach((opt, i) => {
@@ -1977,9 +1957,7 @@ ${emoji} *24h Change:* ${change}%
                     break;
                 }
 
-                // ==========================================
-                // BIRTHDAY command
-                // ==========================================
+                // BIRTHDAY
                 case 'birthday':
                 case 'bday': {
                     const action = args[0]?.toLowerCase();
@@ -1987,15 +1965,13 @@ ${emoji} *24h Change:* ${change}%
                     
                     if (action === 'set') {
                         const date = args[1];
-                        if (!date || !date.includes('/')) {
-                            return reply(`⚠️ Usage: .bday set DD/MM\nExample: .bday set 25/12` + FOOTER);
-                        }
+                        if (!date || !date.includes('/')) return reply(`⚠️ Usage: .bday set DD/MM` + FOOTER);
                         const userJid = msg.key.participant || sender;
                         global.birthdays[userJid] = date;
-                        await reply(`🎂 Birthday saved: *${date}*` + FOOTER);
+                        await reply(`🎂 Saved: *${date}*` + FOOTER);
                     } else if (action === 'list') {
                         const entries = Object.entries(global.birthdays);
-                        if (entries.length === 0) return reply(`🎂 No birthdays saved!` + FOOTER);
+                        if (entries.length === 0) return reply(`🎂 No birthdays!` + FOOTER);
                         
                         let list = `🎂 *BIRTHDAYS*\n\n`;
                         entries.forEach(([jid, date]) => {
@@ -2031,8 +2007,68 @@ ${emoji} *24h Change:* ${change}%
                 }
 
                 // ==========================================
-                // MENU command
+                // ANTI-LINK (PER GROUP)
                 // ==========================================
+                case 'antilink': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
+                    
+                    // Check admin or owner
+                    let isAdmin = msg.key.fromMe;
+                    if (!isAdmin) {
+                        try {
+                            const meta = await socket.groupMetadata(sender);
+                            const participant = meta.participants.find(p => p.id === msg.key.participant);
+                            isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+                        } catch (e) {}
+                    }
+                    
+                    if (!isAdmin) return reply(`⚠️ Only admins or owner!` + FOOTER);
+                    
+                    const val = args[0]?.toLowerCase();
+                    const current = groupAntiLink.get(sender) || await get(`ANTILINK_${sender}`, number) || 'off';
+                    
+                    if (!val || !['on', 'off'].includes(val)) {
+                        return reply(`🔗 *Anti-Link (This Group)*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .antilink on/off` + FOOTER);
+                    }
+                    
+                    // Save per group
+                    groupAntiLink.set(sender, val);
+                    await handleSettingUpdate(`ANTILINK_${sender}`, val, reply, number);
+                    break;
+                }
+
+                // ==========================================
+                // WELCOME (PER GROUP)
+                // ==========================================
+                case 'welcome': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
+                    
+                    // Check admin or owner
+                    let isAdmin = msg.key.fromMe;
+                    if (!isAdmin) {
+                        try {
+                            const meta = await socket.groupMetadata(sender);
+                            const participant = meta.participants.find(p => p.id === msg.key.participant);
+                            isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+                        } catch (e) {}
+                    }
+                    
+                    if (!isAdmin) return reply(`⚠️ Only admins or owner!` + FOOTER);
+                    
+                    const val = args[0]?.toLowerCase();
+                    const current = groupWelcome.get(sender) || await get(`WELCOME_${sender}`, number) || 'off';
+                    
+                    if (!val || !['on', 'off'].includes(val)) {
+                        return reply(`👋 *Welcome (This Group)*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .welcome on/off` + FOOTER);
+                    }
+                    
+                    // Save per group
+                    groupWelcome.set(sender, val);
+                    await handleSettingUpdate(`WELCOME_${sender}`, val, reply, number);
+                    break;
+                }
+
+                // MENU command
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
@@ -2077,8 +2113,7 @@ Example: Reply \`1\` for Download Commands
 🔗 Web: https://nimsara-official.vercel.app/
 *🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
-> _MADE BY NIMSARA_
-`;
+> _MADE BY NIMSARA_`;
 
                     const sentMsg = await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
@@ -2108,11 +2143,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
-                // ==========================================
-                // Mode command
-                // ==========================================
+                // Mode
                 case 'mode': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
 
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validModes = ['public', 'group', 'inbox', 'private'];
@@ -2126,22 +2159,18 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
-                // ==========================================
-                // Ping command
-                // ==========================================
+                // Ping
                 case 'ping': {
                     const start = Date.now();
                     const sentMsg = await socket.sendMessage(sender, { text: 'Pinging...' }, { quoted: msg });
                     const latency = Date.now() - start;
-                    await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER }, { quoted: sentMsg });
+                    await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*` + FOOTER }, { quoted: sentMsg });
                     break;
                 }
 
-                // ==========================================
-                // Autoread command
-                // ==========================================
+                // Autoread
                 case 'autoread': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
 
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validOptions = ['all', 'cmd', 'off'];
@@ -2155,11 +2184,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
-                // ==========================================
-                // Autoreply command
-                // ==========================================
+                // Autoreply
                 case 'autoreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
 
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validOptions = ['all', 'inbox', 'group', 'off'];
@@ -2173,9 +2200,7 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
-                // ==========================================
-                // Alive/Status command
-                // ==========================================
+                // Alive
                 case 'alive':
                 case 'status': {
                     const startTime = socketCreationTime.get(number) || Date.now();
@@ -2184,7 +2209,7 @@ Example: Reply \`1\` for Download Commands
                     const minutes = Math.floor((uptime % 3600) / 60);
                     const seconds = Math.floor(uptime % 60);
 
-                    const aliveText = `👋 *${botName}* is online!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n> 👨‍💻 Creator: Nimsara\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER;
+                    const aliveText = `👋 *${botName}* is online!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara` + FOOTER;
 
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
@@ -2204,9 +2229,7 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
-                // ==========================================
-                // Runtime command
-                // ==========================================
+                // Runtime
                 case 'runtime': {
                     const startTime = socketCreationTime.get(number) || Date.now();
                     const uptime = Math.floor((Date.now() - startTime) / 1000);
@@ -2217,22 +2240,18 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
-                // ==========================================
-                // Owner command
-                // ==========================================
+                // Owner
                 case 'owner': {
-                    await reply(`👑 *Bot Owner*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER);
+                    await reply(`👑 *Bot Owner*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // Send/Save command
-                // ==========================================
+                // Send/Save
                 case 'send':
                 case 'save': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
                     if (!quoted || !quoted.quotedMessage) {
-                        return reply(`⚠️ Please reply to media with *${prefix}send*` + FOOTER);
+                        return reply(`⚠️ Reply to media with *${prefix}send*` + FOOTER);
                     }
 
                     const quotedMsg = {
@@ -2254,7 +2273,7 @@ Example: Reply \`1\` for Download Commands
                         if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(messageType)) {
                             const buffer = await downloadMediaMessage(quotedMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                             const innerMsg = quotedMsg.message[messageType];
-                            const caption = `${innerMsg?.caption || ''}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER;
+                            const caption = `${innerMsg?.caption || ''}` + FOOTER;
 
                             if (messageType === 'imageMessage') {
                                 await socket.sendMessage(sender, { image: buffer, caption }, { quoted: msg });
@@ -2275,14 +2294,12 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
-                // ==========================================
-                // View Once command
-                // ==========================================
+                // View Once
                 case 'vv':
                 case 'viewonce': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
                     if (!quoted || !quoted.quotedMessage) {
-                        return reply(`⚠️ Please reply to a View Once media with *${prefix}vv*` + FOOTER);
+                        return reply(`⚠️ Reply to View Once media with *${prefix}vv*` + FOOTER);
                     }
 
                     let qMsg = quoted.quotedMessage;
@@ -2302,7 +2319,7 @@ Example: Reply \`1\` for Download Commands
                         try {
                             const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                             const innerMsg = qMsg[messageType];
-                            const caption = `📥 *View Once Media*\n\n${innerMsg?.caption || ''}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER;
+                            const caption = `📥 *View Once Media*\n\n${innerMsg?.caption || ''}` + FOOTER;
 
                             if (messageType === 'imageMessage') {
                                 await socket.sendMessage(sender, { image: buffer, caption }, { quoted: msg });
@@ -2313,33 +2330,27 @@ Example: Reply \`1\` for Download Commands
                             await reply(`❌ Failed: ${err.message}` + FOOTER);
                         }
                     } else {
-                        await reply(`⚠️ Please reply to a View Once image or video!` + FOOTER);
+                        await reply(`⚠️ Reply to View Once image/video!` + FOOTER);
                     }
                     break;
                 }
 
-                // ==========================================
-                // Set prefix command
-                // ==========================================
+                // Set prefix
                 case 'setprefix': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const newPrefix = args[0];
                     if (!newPrefix) return reply(`⚠️ Usage: .setprefix [New Prefix]` + FOOTER);
                     await handleSettingUpdate("PREFIX", newPrefix, reply, number);
                     break;
                 }
 
-                // ==========================================
-                // Settings command
-                // ==========================================
+                // Settings
                 case 'settings': {
                     const pfx = await get('PREFIX', number) || '.';
                     const bName = await get('BOT_NAME', number) || 'NIM BOT';
                     const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
                     const autoLike = await get('AUTO_LIKE_STATUS', number) ?? 'true';
                     const alwaysOnline = await get('ALWAYS_ONLINE', number) ?? 'true';
-                    const antiLink = await get('ANTI_LINK', number) ?? 'off';
-                    const welcome = await get('WELCOME_MSG', number) ?? 'off';
 
                     await reply(`⚙️ *${bName} SETTINGS*
 
@@ -2348,88 +2359,48 @@ Example: Reply \`1\` for Download Commands
 > Auto View: *${autoView}*
 > Auto Like: *${autoLike}*
 > Always Online: *${alwaysOnline}*
-> Anti-Link: *${antiLink}*
-> Welcome: *${welcome}*
 
 🛠️ *Commands:*
 • ${pfx}autoview [on/off]
 • ${pfx}autolike [on/off]
 • ${pfx}alwaysonline [on/off]
-• ${pfx}antilink [on/off]
-• ${pfx}welcome [on/off]
 • ${pfx}setprefix [prefix]` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // Auto view command
-                // ==========================================
+                // Autoview
                 case 'autoview': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .autoview on OR .autoview off` + FOOTER);
+                        return reply(`⚠️ Usage: .autoview on/off` + FOOTER);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("AUTO_VIEW_STATUS", normalized, reply, number);
                     break;
                 }
 
-                // ==========================================
-                // Auto like command
-                // ==========================================
+                // Autolike
                 case 'autolike': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .autolike on OR .autolike off` + FOOTER);
+                        return reply(`⚠️ Usage: .autolike on/off` + FOOTER);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("AUTO_LIKE_STATUS", normalized, reply, number);
                     break;
                 }
 
-                // ==========================================
-                // Always online command
-                // ==========================================
+                // Always online
                 case 'alwaysonline': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .alwaysonline on OR .alwaysonline off` + FOOTER);
+                        return reply(`⚠️ Usage: .alwaysonline on/off` + FOOTER);
                     }
                     const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
                     await handleSettingUpdate("ALWAYS_ONLINE", normalized, reply, number);
-                    break;
-                }
-
-                // ==========================================
-                // Anti-Link command
-                // ==========================================
-                case 'antilink': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
-                    const val = args[0]?.toLowerCase();
-                    if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        const current = await get('ANTI_LINK', number) || 'off';
-                        return reply(`🔗 *Anti-Link*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .antilink on/off` + FOOTER);
-                    }
-                    const normalized = (val === 'on' || val === 'true') ? 'on' : 'off';
-                    await handleSettingUpdate("ANTI_LINK", normalized, reply, number);
-                    break;
-                }
-
-                // ==========================================
-                // Welcome command
-                // ==========================================
-                case 'welcome': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌` + FOOTER);
-                    const val = args[0]?.toLowerCase();
-                    if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        const current = await get('WELCOME_MSG', number) || 'off';
-                        return reply(`👋 *Welcome Message*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .welcome on/off` + FOOTER);
-                    }
-                    const normalized = (val === 'on' || val === 'true') ? 'on' : 'off';
-                    await handleSettingUpdate("WELCOME_MSG", normalized, reply, number);
                     break;
                 }
 
@@ -2441,36 +2412,20 @@ Example: Reply \`1\` for Download Commands
         }
     });
 
-    // Anti-link system
-    socket.ev.on('messages.upsert', async ({ messages }) => {
-        for (const msg of messages) {
-            if (!msg.message) continue;
-            const sender = msg.key.remoteJid;
-            if (!sender.endsWith('@g.us')) continue;
-            if (msg.key.fromMe) continue;
-
-            const antiLink = await get('ANTI_LINK', number) || 'off';
-            if (antiLink !== 'on') continue;
-
-            const body = getMessageBody(msg);
-            if (body.match(/chat\.whatsapp\.com|whatsapp\.com\/channel/)) {
-                try {
-                    await socket.sendMessage(sender, { delete: msg.key });
-                    await socket.sendMessage(sender, {
-                        text: `🚫 *Link Detected!*\n\n@${(msg.key.participant || '').split('@')[0]} Links are not allowed!` + FOOTER,
-                        mentions: [msg.key.participant]
-                    });
-                } catch (e) {}
-            }
-        }
-    });
-
-    // Welcome/Goodbye system
+    // ==========================================
+    // Welcome/Goodbye System (PER GROUP)
+    // ==========================================
     socket.ev.on('group-participants.update', async (update) => {
         try {
             const { id, participants, action } = update;
             
-            const welcomeEnabled = await get('WELCOME_MSG', number) || 'off';
+            // Check per-group welcome status
+            let welcomeEnabled = groupWelcome.get(id);
+            if (!welcomeEnabled) {
+                welcomeEnabled = await get(`WELCOME_${id}`, number) || 'off';
+                groupWelcome.set(id, welcomeEnabled);
+            }
+            
             if (welcomeEnabled !== 'on') return;
             
             const groupMeta = await socket.groupMetadata(id);
@@ -2639,8 +2594,6 @@ async function StartBot(number, res = null, isRestore = false) {
                 } catch (e) { }
 
                 const ownJid = `${botNumber}@s.whatsapp.net`;
-                
-                console.log(`[CONNECT MSG] 📤 Sending to: ${ownJid}`);
 
                 await currentSock.sendMessage(ownJid, {
                     image: { url: BOT_IMAGE_URL },
@@ -2667,8 +2620,6 @@ async function StartBot(number, res = null, isRestore = false) {
                     });
                 }
 
-                console.log(`[CONNECT MSG] 🎉 Sent to ${ownJid}`);
-
             } catch (err) {
                 console.log(`[CONNECT MSG] ❌ Error:`, err.message);
                 connectMessageSent = false;
@@ -2691,7 +2642,6 @@ async function StartBot(number, res = null, isRestore = false) {
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
 
-                // 🔥 Send connect message ALWAYS (even on restore)
                 setTimeout(() => {
                     sendConnectMessage(sock, sanitizedNumber);
                 }, 3000);
