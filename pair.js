@@ -33,6 +33,7 @@ const SESSION_BASE_PATH = path.join(__dirname, './sessions');
 const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/Nim-Bot-New-Logo.jfif';
 const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcome%20nim%20new.MP3';
 const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r';
+const CHANNEL_JID = '120363362308230584@newsletter';
 
 const FOOTER = '\n\n> *Creator by Nimsara* 🧛🏻';
 
@@ -43,10 +44,8 @@ const deletedMessages = new Map();
 const reconnectAttempts = new Map();
 const userCategoryState = new Map();
 const menuMessageIds = new Map();
-
-// 🔥 Per-group settings (in-memory, restored from DB)
-const groupAntiLink = new Map();   // { groupJid: 'on'|'off' }
-const groupWelcome = new Map();    // { groupJid: 'on'|'off' }
+const groupAntiLink = new Map();
+const groupWelcome = new Map();
 
 // ==========================================
 // Get message body
@@ -146,7 +145,7 @@ async function useMongoDBAuthState(number) {
 // ==========================================
 function setupCommandHandlers(socket, number) {
 
-    // Anti-Delete handler
+    // Anti-Delete handler (FIXED - 5 minute cache)
     socket.ev.on('messages.update', async (updates) => {
         for (const { key, update } of updates) {
             const protocolMsg = update?.protocolMessage || update?.message?.protocolMessage;
@@ -156,10 +155,11 @@ function setupCommandHandlers(socket, number) {
                     const revokedId = protocolMsg.key?.id || protocolMsg.stanzaId;
                     if (!revokedId) continue;
 
+                    // Try multiple lookups
                     let cachedMsg = messageCache.get(revokedId);
                     if (!cachedMsg) {
-                        for (const [key, value] of messageCache) {
-                            if (value.key?.id === revokedId) {
+                        for (const [cacheKey, value] of messageCache) {
+                            if (value.key?.id === revokedId || value.key?.stanzaId === revokedId) {
                                 cachedMsg = value;
                                 break;
                             }
@@ -179,6 +179,10 @@ function setupCommandHandlers(socket, number) {
                             keyId: revokedId,
                             timestamp: Date.now()
                         });
+
+                        console.log(`[ANTI-DELETE] ✅ Captured from: ${senderJid}`);
+                    } else {
+                        console.log(`[ANTI-DELETE] ⚠️ Not in cache: ${revokedId}`);
                     }
                 }
             }
@@ -190,6 +194,7 @@ function setupCommandHandlers(socket, number) {
         const msg = messages[0];
         if (!msg) return;
 
+        // Cache messages for anti-delete
         if (msg.key && msg.key.id) {
             messageCache.set(msg.key.id, msg);
             if (msg.key.stanzaId) messageCache.set(msg.key.stanzaId, msg);
@@ -223,7 +228,7 @@ function setupCommandHandlers(socket, number) {
             forwardingScore: 999,
             isForwarded: true,
             forwardedNewsletterMessageInfo: {
-                newsletterJid: '120363362308230584@newsletter',
+                newsletterJid: CHANNEL_JID,
                 newsletterName: 'NIM PROJECT',
                 serverMessageId: 100
             }
@@ -243,7 +248,6 @@ function setupCommandHandlers(socket, number) {
             
             const sentMsg = await socket.sendMessage(sender, messagePayload, { quoted: quotedMsg });
 
-            // 🔥 Auto-react only if this is a command reply
             if (reactEmoji && isCommand) {
                 try {
                     const emojis = ['✅', '👍', '🎯', '⚡', '🔥', '💫', '✨'];
@@ -258,43 +262,56 @@ function setupCommandHandlers(socket, number) {
         };
 
         // ==========================================
-        // 🔥 Per-Group Anti-Link Check
+        // 🔥 Per-Group Anti-Link Check (FIXED)
         // ==========================================
         if (sender.endsWith('@g.us') && !msg.key.fromMe) {
-            const currentStatus = groupAntiLink.get(sender);
-            
-            // Load from DB if not in memory
-            if (!currentStatus) {
-                const dbStatus = await get(`ANTILINK_${sender}`, number) || 'off';
-                groupAntiLink.set(sender, dbStatus);
-            }
-            
-            const status = groupAntiLink.get(sender);
-            
-            if (status === 'on') {
-                if (body.match(/chat\.whatsapp\.com|whatsapp\.com\/channel/i)) {
-                    // Check if sender is admin
-                    let isAdmin = false;
-                    try {
-                        const meta = await socket.groupMetadata(sender);
-                        const participant = meta.participants.find(p => p.id === msg.key.participant);
-                        isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
-                    } catch (e) {}
+            try {
+                let status = groupAntiLink.get(sender);
+                
+                if (status === undefined || status === null) {
+                    let dbStatus = null;
+                    try { dbStatus = await get(`ANTILINK_${sender}`, number); } catch (e) {}
+                    if (!dbStatus) {
+                        try { 
+                            const cleanKey = sender.replace(/[^0-9]/g, '');
+                            dbStatus = await get(`ANTILINK_${cleanKey}`, number); 
+                        } catch (e) {}
+                    }
+                    status = dbStatus || 'off';
+                    groupAntiLink.set(sender, status);
+                }
+                
+                if (status === 'on') {
+                    const linkRegex = /(chat\.whatsapp\.com|whatsapp\.com\/channel|wa\.me\/|t\.me\/|bit\.ly|tinyurl|http:\/\/|https:\/\/)/i;
                     
-                    // Don't delete if sender is admin
-                    if (!isAdmin) {
+                    if (linkRegex.test(body)) {
+                        let isAdmin = false;
                         try {
-                            await socket.sendMessage(sender, { delete: msg.key });
-                            await socket.sendMessage(sender, {
-                                text: `🚫 *Link Detected!*\n\n@${(msg.key.participant || '').split('@')[0]} Links are not allowed!` + FOOTER,
-                                mentions: [msg.key.participant]
-                            });
-                            return;
-                        } catch (e) {
-                            console.log("Anti-link error:", e.message);
+                            const meta = await socket.groupMetadata(sender);
+                            const participant = meta.participants.find(p => p.id === msg.key.participant);
+                            isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+                        } catch (e) {}
+                        
+                        if (!isAdmin) {
+                            try {
+                                await socket.sendMessage(sender, { delete: msg.key });
+                                const userName = (msg.key.participant || '').split('@')[0];
+                                await socket.sendMessage(sender, {
+                                    text: `🚫 *LINK DETECTED!*
+
+👤 @${userName}
+⚠️ Links are not allowed in this group!
+🔗 *Anti-Link: ON*` + FOOTER,
+                                    mentions: [msg.key.participant]
+                                });
+                            } catch (e) {
+                                console.log("Anti-link delete error:", e.message);
+                            }
                         }
                     }
                 }
+            } catch (e) {
+                console.log("Anti-link error:", e.message);
             }
         }
 
@@ -327,9 +344,7 @@ function setupCommandHandlers(socket, number) {
 
         const isMenuReply = isBotMenuMessage || hasMenuKeywords;
 
-        // ==========================================
-        // Handle category selection (1-7)
-        // ==========================================
+        // Category selection
         if (!isCommand && body.match(/^[1-7]$/) && isMenuReply) {
             const categoryNum = parseInt(body);
             let categoryMenu = '';
@@ -340,29 +355,13 @@ function setupCommandHandlers(socket, number) {
                     categoryMenu = `*╭─\`📥 DOWNLOAD COMMANDS\`┈⊷*
 *╎*
 *╎ 🎵 .song [name]*
-*╎    Download songs*
-*╎*
 *╎ 🎬 .tt / .tiktok [url]*
-*╎    Download TikTok videos*
-*╎*
 *╎ 🎬 .yt / .youtube [url] [video/audio]*
-*╎    Download YouTube*
-*╎*
 *╎ 🎬 .fb / .facebook [url]*
-*╎    Download Facebook videos*
-*╎*
 *╎ 📸 .ig / .instagram [url]*
-*╎    Download Instagram posts*
-*╎*
 *╎ 🔗 .tourl / .url*
-*╎    Convert media to URL*
-*╎*
 *╎ 📸 .vv / .viewonce*
-*╎    Download View Once media*
-*╎*
 *╎ 📥 .send / .save*
-*╎    Save quoted media*
-*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -371,35 +370,15 @@ function setupCommandHandlers(socket, number) {
                     categoryMenu = `*╭─\`⚙️ SETTINGS COMMANDS\`┈⊷*
 *╎*
 *╎ 📋 .settings*
-*╎    View current settings*
-*╎*
 *╎ 🔀 .mode [public/group/inbox/private]*
-*╎    Change bot run mode*
-*╎*
 *╎ 👁️ .autoread [all/cmd/off]*
-*╎    Auto-read messages*
-*╎*
 *╎ 🤖 .autoreply [all/inbox/group/off]*
-*╎    Auto-reply settings*
-*╎*
 *╎ 📷 .autoview [on/off]*
-*╎    Auto-view status*
-*╎*
 *╎ ❤️ .autolike [on/off]*
-*╎    Auto-like status*
-*╎*
 *╎ 🟢 .alwaysonline [on/off]*
-*╎    Always online mode*
-*╎*
 *╎ 🔗 .antilink [on/off]*
-*╎    Anti-link (per group)*
-*╎*
 *╎ 👋 .welcome [on/off]*
-*╎    Welcome (per group)*
-*╎*
 *╎ 🔤 .setprefix [prefix]*
-*╎    Change command prefix*
-*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -408,20 +387,11 @@ function setupCommandHandlers(socket, number) {
                     categoryMenu = `*╭─\`👑 OWNER COMMANDS\`┈⊷*
 *╎*
 *╎ 👤 .owner*
-*╎    Bot owner info*
-*╎*
 *╎ 📋 .settings*
-*╎    View all settings*
-*╎*
+*╎ 📊 .active*
 *╎ 🔤 .setprefix [prefix]*
-*╎    Change prefix*
-*╎*
 *╎ 💾 .setreply [trigger] [response]*
-*╎    Custom replies*
-*╎*
 *╎ 📝 .note save [name] [content]*
-*╎    Save notes*
-*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -429,116 +399,51 @@ function setupCommandHandlers(socket, number) {
                 case 4:
                     categoryMenu = `*╭─\`🛠️ UTILITY COMMANDS\`┈⊷*
 *╎*
-*╎ 🏓 .ping*
-*╎    Response time*
-*╎*
-*╎ ⏱️ .runtime*
-*╎    Bot uptime*
-*╎*
+*╎ 🏓 .ping - ⏱️ .runtime*
 *╎ 🕐 .time / .date*
-*╎    Current time & date*
-*╎*
 *╎ 📍 .jid*
-*╎    JID information*
-*╎*
 *╎ ❤️ .alive / .status*
-*╎    Bot status*
-*╎*
 *╎ 🗑️ .remsg / .delete*
-*╎    Recover deleted msg*
-*╎*
 *╎ 👤 .whois / .userinfo*
-*╎    User information*
-*╎*
 *╎ 🔐 .password [length]*
-*╎    Generate password*
-*╎*
 *╎ 🔗 .short [url]*
-*╎    Shorten URL*
-*╎*
 *╎ 📱 .qr [text]*
-*╎    Generate QR code*
-*╎*
 *╎ 🌤️ .weather [city]*
-*╎    Weather report*
-*╎*
 *╎ 🌐 .ip [domain]*
-*╎    IP/Domain lookup*
-*╎*
 *╎ 🔐 .base64 [enc/dec] [text]*
-*╎    Base64 encode/decode*
-*╎*
 *╎ ✅ .check [number]*
-*╎    Check WhatsApp number*
-*╎*
 *╎ 💰 .crypto [coin]*
-*╎    Crypto prices*
-*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 5:
-                    categoryMenu = `*╭─\`🤖 AI & CONVERT COMMANDS\`┈⊷*
+                    categoryMenu = `*╭─\`🤖 AI & CONVERT\`┈⊷*
 *╎*
 *╎ 🤖 .ai / .gpt [question]*
-*╎    AI Chatbot*
-*╎*
 *╎ 🌐 .tr [lang]*
-*╎    Translate (reply to msg)*
-*╎*
 *╎ 🎨 .imagine [prompt]*
-*╎    AI image generator*
-*╎*
 *╎ 📸 .sticker / .s*
-*╎    Image/Video to sticker*
-*╎*
 *╎ 📱 .fakechat [name|msg]*
-*╎    Fake chat image*
-*╎*
 *╎ 📸 .ss [url]*
-*╎    Website screenshot*
-*╎*
 *╎ 🎤 .tts [text]*
-*╎    Text to speech*
-*╎*
 *╎ 🎨 .textimg [text]*
-*╎    Text to image*
-*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 6:
-                    categoryMenu = `*╭─\`👥 GROUP ADMIN COMMANDS\`┈⊷*
+                    categoryMenu = `*╭─\`👥 GROUP ADMIN\`┈⊷*
 *╎*
 *╎ 📢 .tagall [msg]*
-*╎    Mention all members*
-*╎*
 *╎ 👢 .kick*
-*╎    Kick member (reply)*
-*╎*
 *╎ 👑 .promote*
-*╎    Make admin (reply)*
-*╎*
 *╎ 👤 .demote*
-*╎    Remove admin (reply)*
-*╎*
 *╎ 🔇 .mute*
-*╎    Mute group*
-*╎*
 *╎ 🔊 .unmute*
-*╎    Unmute group*
-*╎*
 *╎ 📊 .ginfo / .groupinfo*
-*╎    Group information*
-*╎*
 *╎ 📊 .poll [Q|opt1|opt2]*
-*╎    Group poll*
-*╎*
-*╎ 📞 .getcontact [invite link]*
-*╎    Send random messages*
-*╎*
+*╎ 📞 .getcontact*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -547,23 +452,11 @@ function setupCommandHandlers(socket, number) {
                     categoryMenu = `*╭─\`🎮 FUN COMMANDS\`┈⊷*
 *╎*
 *╎ 🎯 .quote*
-*╎    Random quote*
-*╎*
 *╎ 🎲 .dice*
-*╎    Roll a dice*
-*╎*
 *╎ 🎰 .flip*
-*╎    Flip a coin*
-*╎*
 *╎ 😂 .joke / .sijoke*
-*╎    Random jokes*
-*╎*
 *╎ 🔢 .random [min] [max]*
-*╎    Random number*
-*╎*
 *╎ 🎂 .bday set [DD/MM]*
-*╎    Birthday tracker*
-*╎*
 *╰───────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -584,18 +477,15 @@ function setupCommandHandlers(socket, number) {
             return;
         }
 
-        // Handle "0" - Back to main menu
+        // Back to main menu
         if (!isCommand && body === '0' && isMenuReply) {
-            const startTime = socketCreationTime.get(number) || Date.now();
-            const uptime = Math.floor((Date.now() - startTime) / 1000);
-            const hours = Math.floor(uptime / 3600);
-            const minutes = Math.floor((uptime % 3600) / 60);
-            const seconds = Math.floor(uptime % 60);
             const botName = await get('BOT_NAME', number) || 'NIM BOT';
+            const isFollowing = await checkChannelFollow(socket, msg.key.participant || sender);
+            const followStatus = isFollowing ? '✅ Followed' : '❌ Not Followed';
 
             const mainMenu = `
 *👋 ${botName.toUpperCase()} 🧛🏻*
-*-- The Mini Whatsapp Bot Experience --*
+*--The Mini Whatsapp Bot Experience--*
 
 > Created By Nimsara 🧛🏻
 > 🪀 Contact - 0784280074
@@ -603,14 +493,12 @@ function setupCommandHandlers(socket, number) {
 ─────────────────────
 *BOT STATUS 👾*
 > Bot Name : ${botName}
-> Run Time : ${hours}h ${minutes}m ${seconds}s
-> Host : RENDER
 > Activers : ${activeSockets.size}
-> Bot Channel : ✅ Followed
+> Channel : ${followStatus}
 > Bot Creator : NIMSARA
 ─────────────────────
 
-*╭─\`💠 𝗕𝗢𝗧 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┈⊷*
+*╭─\`𝗕𝗢𝗧 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┈⊷*
 *╎*
 *╎ 1️⃣ - 📥 DOWNLOAD COMMANDS*
 *╎ 2️⃣ - ⚙️ SETTINGS COMMANDS*
@@ -623,7 +511,6 @@ function setupCommandHandlers(socket, number) {
 *╰───────────────────────*
 
 💡 *Reply to this message with a number!*
-Example: Reply \`1\` for Download Commands
 
 🔗 Web: https://nimsara-official.vercel.app/
 *🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
@@ -637,11 +524,7 @@ Example: Reply \`1\` for Download Commands
             }, { quoted: msg });
             
             if (sentMsg?.key?.id) {
-                messageIdsSet(sentMsg.key.id);
-            }
-            
-            function messageIdsSet(id) {
-                menuMessageIds.set(id, { type: 'main' });
+                menuMessageIds.set(sentMsg.key.id, { type: 'main' });
             }
             
             return;
@@ -779,7 +662,48 @@ id - 842717887
         try {
             switch (command) {
 
-                // Delete message recover
+                // ==========================================
+                // 🔥 .active - List all active sessions
+                // ==========================================
+                case 'active':
+                case 'activeusers': {
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    
+                    try {
+                        const allSessions = await Session.find({});
+                        const active = Array.from(activeSockets.keys());
+                        
+                        let activeText = `🔥 *ACTIVE USERS*\n\n`;
+                        activeText += `📊 *Total Connected:* ${active.length}\n`;
+                        activeText += `💾 *Total Sessions:* ${allSessions.length}\n\n`;
+                        
+                        if (active.length === 0) {
+                            activeText += `❌ No active sessions!\n`;
+                        } else {
+                            activeText += `*📱 Active Numbers:*\n\n`;
+                            active.forEach((num, i) => {
+                                const startTime = socketCreationTime.get(num);
+                                const uptime = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+                                const hours = Math.floor(uptime / 3600);
+                                const mins = Math.floor((uptime % 3600) / 60);
+                                
+                                activeText += `${i+1}. *+${num}*\n`;
+                                activeText += `   ⏱️ Online: ${hours}h ${mins}m\n`;
+                            });
+                        }
+                        
+                        activeText += `\n💡 Bot: ${botName}`;
+                        
+                        await reply(activeText + FOOTER);
+                    } catch (e) {
+                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // Delete message recover (FIXED)
+                // ==========================================
                 case 'remsg':
                 case 'delete':
                 case 'getdel': {
@@ -794,18 +718,20 @@ id - 842717887
                     }
 
                     if (!lastDeleted) {
-                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ! 😔' + FOOTER);
+                        await reply('❌ මේ චැට් එකේ recent delete කරපු message එකක් හමුවුණේ නෑ! 😔\n\n💡 *Tip:* Messages are cached for 5 minutes!' + FOOTER);
                         return;
                     }
 
                     const senderJid = lastDeleted.sender;
                     const senderName = senderJid.split('@')[0];
+                    const timeAgo = Math.floor((Date.now() - lastDeleted.timestamp) / 1000);
+                    const minsAgo = Math.floor(timeAgo / 60);
 
-                    const recoverText = `
-╭─❖ *🗑️ DELETED MESSAGE RECOVERED* ❖─╮
+                    const recoverText = `╭─❖ *🗑️ DELETED MESSAGE RECOVERED* ❖─╮
 │
 │ 👤 *Sender:* @${senderName}
 │ ⏰ *Time:* ${lastDeleted.time}
+│ ⌛ *Deleted:* ${minsAgo}m ago
 │ 💬 *Message:*
 │ ${lastDeleted.text}
 │
@@ -815,6 +741,12 @@ id - 842717887
                         text: recoverText.trim(),
                         mentions: [senderJid]
                     });
+
+                    if (lastDeleted.originalMsg) {
+                        try {
+                            await reply(`📌 *Original:*`, lastDeleted.originalMsg);
+                        } catch (e) {}
+                    }
                     break;
                 }
 
@@ -824,13 +756,11 @@ id - 842717887
                     const senderJid = msg.key.participant || msg.key.remoteJid;
                     const quotedJid = msg.message?.extendedTextMessage?.contextInfo?.participant || 'None';
 
-                    await reply(`
-📍 *JID INFORMATION* 📍
+                    await reply(`📍 *JID INFORMATION*
 
 💬 *Chat JID:* \`${chatJid}\`
 👤 *Sender JID:* \`${senderJid}\`
-🎯 *Quoted JID:* \`${quotedJid}\`
-`.trim() + FOOTER);
+🎯 *Quoted JID:* \`${quotedJid}\`` + FOOTER);
                     break;
                 }
 
@@ -838,7 +768,7 @@ id - 842717887
                 case 'ai':
                 case 'gpt': {
                     const query = args.join(' ');
-                    if (!query) return reply(`⚠️ Please provide a question!\nExample: .ai What is AI?` + FOOTER);
+                    if (!query) return reply(`⚠️ Please provide a question!` + FOOTER);
 
                     await reply(`🤖 Thinking... 🧠` + FOOTER);
                     try {
@@ -852,14 +782,14 @@ id - 842717887
                         if (!aiAnswer) {
                             try {
                                 const res = await axios.get(`https://api.affiliateplus.xyz/api/gpt?query=${encodeURIComponent(query)}`, { timeout: 15000 });
-                                aiAnswer = res.data?.reply || res.data?.response || res.data?.result;
+                                aiAnswer = res.data?.reply || res.data?.response;
                             } catch (e2) {}
                         }
 
                         if (!aiAnswer) {
                             try {
                                 const res = await axios.get(`https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, { timeout: 15000 });
-                                aiAnswer = res.data?.data || res.data?.response || res.data?.result;
+                                aiAnswer = res.data?.data || res.data?.response;
                             } catch (e3) {}
                         }
 
@@ -868,7 +798,6 @@ id - 842717887
                         }
 
                         await reply(`🤖 *AI ASSISTANT*\n\n${aiAnswer.trim()}` + FOOTER);
-
                     } catch (e) {
                         await reply(`❌ AI Error: ${e.message}` + FOOTER);
                     }
@@ -939,7 +868,7 @@ id - 842717887
                         if (!videoUrl) {
                             try {
                                 const apiRes = await axios.get(`https://api.vevioz.com/api/button/tiktok/${encodeURIComponent(url)}`, { timeout: 15000 });
-                                videoUrl = apiRes.data?.downloadUrl || apiRes.data?.url || apiRes.data?.link;
+                                videoUrl = apiRes.data?.downloadUrl || apiRes.data?.url;
                             } catch (e) {}
                         }
 
@@ -1029,7 +958,7 @@ id - 842717887
                         if (!videoUrl) {
                             try {
                                 const apiRes = await axios.get(`https://api.vevioz.com/api/button/facebook/${encodeURIComponent(url)}`, { timeout: 15000 });
-                                videoUrl = apiRes.data?.downloadUrl || apiRes.data?.url || apiRes.data?.link;
+                                videoUrl = apiRes.data?.downloadUrl || apiRes.data?.url;
                             } catch (e) {}
                         }
 
@@ -1135,7 +1064,7 @@ id - 842717887
                     }
                     
                     if (!textToTranslate) {
-                        return reply(`⚠️ Usage: .tr [lang] [text]\nOR reply to a message with .tr [lang]` + FOOTER);
+                        return reply(`⚠️ Usage: .tr [lang] [text]\nOR reply to a message` + FOOTER);
                     }
                     
                     try {
@@ -1201,7 +1130,7 @@ id - 842717887
                             caption: `📱 *QR Code*\n\n📝 Content: ${text}` + FOOTER
                         }, { quoted: msg });
                     } catch (e) {
-                        await reply(`❌ QR failed: ${e.message}` + FOOTER);
+                        await reply(`❌ QR failed!` + FOOTER);
                     }
                     break;
                 }
@@ -1325,7 +1254,7 @@ id - 842717887
                     break;
                 }
 
-                // FakeChat (FIXED)
+                // FakeChat
                 case 'fakechat': {
                     const text = args.join(' ');
                     if (!text || !text.includes('|')) {
@@ -1376,7 +1305,7 @@ id - 842717887
                     break;
                 }
 
-                // GETCONTACT (NEW) - Send random messages to group members
+                // GETCONTACT - Send random messages to group members
                 case 'getcontact':
                 case 'gc': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -1386,7 +1315,6 @@ id - 842717887
                         const meta = await socket.groupMetadata(sender);
                         const botJid = socket.user.id.split(':')[0] + '@s.whatsapp.net';
                         
-                        // Get members except bot and owner
                         const members = meta.participants
                             .filter(p => p.id !== botJid && p.id !== msg.key.participant)
                             .map(p => p.id);
@@ -1409,7 +1337,7 @@ id - 842717887
                                 sent++;
                                 await delay(1500);
                             } catch (e) {
-                                console.log(`Failed to send to ${memberJid}:`, e.message);
+                                console.log(`Failed: ${memberJid}`);
                             }
                         }
                         
@@ -1648,7 +1576,7 @@ id - 842717887
                     break;
                 }
 
-                // TTS (FIXED)
+                // TTS
                 case 'tts':
                 case 'say': {
                     const text = args.join(' ');
@@ -1661,7 +1589,7 @@ id - 842717887
                             responseType: 'arraybuffer', 
                             timeout: 15000,
                             headers: {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                             }
                         });
                         
@@ -1684,13 +1612,12 @@ id - 842717887
                     break;
                 }
 
-                // CRYPTO (FIXED)
+                // CRYPTO
                 case 'crypto':
                 case 'price': {
                     let coin = args[0]?.toLowerCase();
                     if (!coin) return reply(`⚠️ Usage: .crypto [coin]\nExample: .crypto btc` + FOOTER);
                     
-                    // Convert symbols to full names
                     const coinMap = {
                         'btc': 'bitcoin',
                         'eth': 'ethereum',
@@ -1721,9 +1648,7 @@ id - 842717887
 
 💵 *USD:* $${data.usd?.toLocaleString() || 'N/A'}
 🇱🇰 *LKR:* Rs. ${data.lkr?.toLocaleString() || 'N/A'}
-${emoji} *24h:* ${change}%
-
-> _Powered by CoinGecko_` + FOOTER);
+${emoji} *24h:* ${change}%` + FOOTER);
                     } catch (e) {
                         await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
@@ -2006,13 +1931,10 @@ ${emoji} *24h:* ${change}%
                     break;
                 }
 
-                // ==========================================
-                // ANTI-LINK (PER GROUP)
-                // ==========================================
+                // ANTI-LINK (PER GROUP - FIXED)
                 case 'antilink': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
-                    // Check admin or owner
                     let isAdmin = msg.key.fromMe;
                     if (!isAdmin) {
                         try {
@@ -2025,25 +1947,68 @@ ${emoji} *24h:* ${change}%
                     if (!isAdmin) return reply(`⚠️ Only admins or owner!` + FOOTER);
                     
                     const val = args[0]?.toLowerCase();
-                    const current = groupAntiLink.get(sender) || await get(`ANTILINK_${sender}`, number) || 'off';
                     
-                    if (!val || !['on', 'off'].includes(val)) {
-                        return reply(`🔗 *Anti-Link (This Group)*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .antilink on/off` + FOOTER);
+                    let current = groupAntiLink.get(sender);
+                    if (current === undefined || current === null) {
+                        let dbVal = null;
+                        try { dbVal = await get(`ANTILINK_${sender}`, number); } catch (e) {}
+                        if (!dbVal) {
+                            try { 
+                                const cleanKey = sender.replace(/[^0-9]/g, '');
+                                dbVal = await get(`ANTILINK_${cleanKey}`, number); 
+                            } catch (e) {}
+                        }
+                        current = dbVal || 'off';
+                        groupAntiLink.set(sender, current);
                     }
                     
-                    // Save per group
+                    if (!val || !['on', 'off'].includes(val)) {
+                        return reply(`🔗 *ANTI-LINK STATUS*
+
+📊 *Current:* ${current === 'on' ? '✅ ON' : '❌ OFF'}
+📍 *Group:* This group only
+🆔 *Group ID:* \`${sender.split('@')[0]}\`
+
+*Usage:*
+• \`.antilink on\` - Enable
+• \`.antilink off\` - Disable
+
+💡 When ON, links sent by non-admins will be deleted!` + FOOTER);
+                    }
+                    
                     groupAntiLink.set(sender, val);
-                    await handleSettingUpdate(`ANTILINK_${sender}`, val, reply, number);
+                    
+                    let saved = false;
+                    try {
+                        await handleSettingUpdate(`ANTILINK_${sender}`, val, reply, number);
+                        saved = true;
+                    } catch (e) {
+                        console.log("Save 1 failed:", e.message);
+                    }
+                    
+                    if (!saved) {
+                        try {
+                            const cleanKey = sender.replace(/[^0-9]/g, '');
+                            await handleSettingUpdate(`ANTILINK_${cleanKey}`, val, reply, number);
+                            saved = true;
+                        } catch (e) {
+                            console.log("Save 2 failed:", e.message);
+                        }
+                    }
+                    
+                    await reply(`✅ *Anti-Link ${val === 'on' ? 'ENABLED' : 'DISABLED'}*
+
+📊 *Status:* ${val === 'on' ? '✅ ON' : '❌ OFF'}
+📍 *Group:* This group only
+
+💡 ${val === 'on' ? 'Links from non-admins will be deleted!' : 'Links are allowed again.'}` + FOOTER);
                     break;
                 }
 
-                // ==========================================
-                // WELCOME (PER GROUP)
-                // ==========================================
+                // WELCOME (PER GROUP - FIXED)
                 case 'welcome': {
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
-                    // Check admin or owner
                     let isAdmin = msg.key.fromMe;
                     if (!isAdmin) {
                         try {
@@ -2056,15 +2021,56 @@ ${emoji} *24h:* ${change}%
                     if (!isAdmin) return reply(`⚠️ Only admins or owner!` + FOOTER);
                     
                     const val = args[0]?.toLowerCase();
-                    const current = groupWelcome.get(sender) || await get(`WELCOME_${sender}`, number) || 'off';
                     
-                    if (!val || !['on', 'off'].includes(val)) {
-                        return reply(`👋 *Welcome (This Group)*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .welcome on/off` + FOOTER);
+                    let current = groupWelcome.get(sender);
+                    if (current === undefined || current === null) {
+                        let dbVal = null;
+                        try { dbVal = await get(`WELCOME_${sender}`, number); } catch (e) {}
+                        if (!dbVal) {
+                            try { 
+                                const cleanKey = sender.replace(/[^0-9]/g, '');
+                                dbVal = await get(`WELCOME_${cleanKey}`, number); 
+                            } catch (e) {}
+                        }
+                        current = dbVal || 'off';
+                        groupWelcome.set(sender, current);
                     }
                     
-                    // Save per group
+                    if (!val || !['on', 'off'].includes(val)) {
+                        return reply(`👋 *WELCOME STATUS*
+
+📊 *Current:* ${current === 'on' ? '✅ ON' : '❌ OFF'}
+📍 *Group:* This group only
+
+*Usage:*
+• \`.welcome on\` - Enable
+• \`.welcome off\` - Disable` + FOOTER);
+                    }
+                    
                     groupWelcome.set(sender, val);
-                    await handleSettingUpdate(`WELCOME_${sender}`, val, reply, number);
+                    
+                    let saved = false;
+                    try {
+                        await handleSettingUpdate(`WELCOME_${sender}`, val, reply, number);
+                        saved = true;
+                    } catch (e) {
+                        console.log("Save 1 failed:", e.message);
+                    }
+                    
+                    if (!saved) {
+                        try {
+                            const cleanKey = sender.replace(/[^0-9]/g, '');
+                            await handleSettingUpdate(`WELCOME_${cleanKey}`, val, reply, number);
+                            saved = true;
+                        } catch (e) {
+                            console.log("Save 2 failed:", e.message);
+                        }
+                    }
+                    
+                    await reply(`✅ *Welcome ${val === 'on' ? 'ENABLED' : 'DISABLED'}*
+
+📊 *Status:* ${val === 'on' ? '✅ ON' : '❌ OFF'}
+📍 *Group:* This group only` + FOOTER);
                     break;
                 }
 
@@ -2072,11 +2078,9 @@ ${emoji} *24h:* ${change}%
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
-                    const startTime = socketCreationTime.get(number) || Date.now();
-                    const uptime = Math.floor((Date.now() - startTime) / 1000);
-                    const hours = Math.floor(uptime / 3600);
-                    const minutes = Math.floor((uptime % 3600) / 60);
-                    const seconds = Math.floor(uptime % 60);
+                    const botName = await get('BOT_NAME', number) || 'NIM BOT';
+                    const isFollowing = await checkChannelFollow(socket, msg.key.participant || sender);
+                    const followStatus = isFollowing ? '✅ Followed' : '❌ Not Followed';
 
                     const captionText = `
 *👋 ${botName.toUpperCase()} 🧛🏻*
@@ -2088,10 +2092,8 @@ ${emoji} *24h:* ${change}%
 ─────────────────────
 *BOT STATUS 👾*
 > Bot Name : ${botName}
-> Run Time : ${hours}h ${minutes}m ${seconds}s
-> Host : RENDER
 > Activers : ${activeSockets.size}
-> Bot Channel : ✅ Followed
+> Channel : ${followStatus}
 > Bot Creator : NIMSARA
 ─────────────────────
 
@@ -2110,7 +2112,7 @@ ${emoji} *24h:* ${change}%
 💡 *Reply to this message with a number!*
 Example: Reply \`1\` for Download Commands
 
-🔗 Web: https://nimsara-official.vercel.app/
+${isFollowing ? '' : `⚠️ *Please follow our channel first!*\n${BOT_CHANNEL_LINK}\n\n`}🔗 Web: https://nimsara-official.vercel.app/
 *🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _MADE BY NIMSARA_`;
@@ -2412,17 +2414,22 @@ Example: Reply \`1\` for Download Commands
         }
     });
 
-    // ==========================================
     // Welcome/Goodbye System (PER GROUP)
-    // ==========================================
     socket.ev.on('group-participants.update', async (update) => {
         try {
             const { id, participants, action } = update;
             
-            // Check per-group welcome status
             let welcomeEnabled = groupWelcome.get(id);
             if (!welcomeEnabled) {
-                welcomeEnabled = await get(`WELCOME_${id}`, number) || 'off';
+                let dbVal = null;
+                try { dbVal = await get(`WELCOME_${id}`, number); } catch (e) {}
+                if (!dbVal) {
+                    try { 
+                        const cleanKey = id.replace(/[^0-9]/g, '');
+                        dbVal = await get(`WELCOME_${cleanKey}`, number); 
+                    } catch (e) {}
+                }
+                welcomeEnabled = dbVal || 'off';
                 groupWelcome.set(id, welcomeEnabled);
             }
             
@@ -2452,6 +2459,33 @@ Example: Reply \`1\` for Download Commands
             console.log("Group welcome error:", e.message);
         }
     });
+}
+
+// ==========================================
+// Check Channel Follow Status
+// ==========================================
+async function checkChannelFollow(socket, userJid) {
+    try {
+        // Try to fetch channel metadata - if user is admin/owner, they can fetch
+        // This is a simplified check - actual follow status requires user to interact
+        const channelMeta = await socket.newsletterMetadata('jid', CHANNEL_JID);
+        
+        if (!channelMeta) return false;
+        
+        // Check if user is in subscribers list (if available)
+        // Note: WhatsApp doesn't expose subscriber list publicly
+        // This is a workaround - consider user followed if they can see channel
+        if (channelMeta.viewer_metadata) {
+            return channelMeta.viewer_metadata.role === 'ADMIN' || 
+                   channelMeta.viewer_metadata.role === 'OWNER' ||
+                   channelMeta.viewer_metadata.role === 'SUBSCRIBER';
+        }
+        
+        return false;
+    } catch (e) {
+        console.log("Channel check error:", e.message);
+        return false;
+    }
 }
 
 // ==========================================
@@ -2602,7 +2636,7 @@ async function StartBot(number, res = null, isRestore = false) {
                         forwardingScore: 999,
                         isForwarded: true,
                         forwardedNewsletterMessageInfo: {
-                            newsletterJid: '120363362308230584@newsletter',
+                            newsletterJid: CHANNEL_JID,
                             newsletterName: 'NIM PROJECT',
                             serverMessageId: 100
                         }
