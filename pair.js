@@ -41,7 +41,6 @@ const messageCache = new Map();
 const deletedMessages = new Map();
 const reconnectAttempts = new Map();
 const userCategoryState = new Map();
-// 🔥 NEW: Store menu message IDs to detect replies to bot's menu
 const menuMessageIds = new Map();
 
 // ==========================================
@@ -245,13 +244,12 @@ function setupCommandHandlers(socket, number) {
         };
 
         // ==========================================
-        // 🔥 MENU REPLY HANDLER - FIXED
+        // MENU REPLY HANDLER
         // ==========================================
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
         const quotedStanzaId = contextInfo?.stanzaId || '';
         const quotedParticipant = contextInfo?.participant || '';
         
-        // Get quoted message text from multiple types
         let quotedText = '';
         const qm = contextInfo?.quotedMessage || {};
         if (qm.conversation) {
@@ -264,10 +262,8 @@ function setupCommandHandlers(socket, number) {
             quotedText = qm.videoMessage.caption;
         }
 
-        // 🔥 FIXED: Check if quoted message is from bot using stored menu IDs
         const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
         
-        // Also check by menu text keywords as backup
         const hasMenuKeywords = quotedText.includes('𝗕𝗢𝗧 𝗠𝗘𝗡𝗨') || 
                                quotedText.includes('MENU CATEGORIES') ||
                                quotedText.includes('Reply to this message with a number') ||
@@ -277,12 +273,12 @@ function setupCommandHandlers(socket, number) {
 
         const isMenuReply = isBotMenuMessage || hasMenuKeywords;
 
-        console.log(`[MENU DEBUG] Body: "${body}" | stanzaId: ${quotedStanzaId} | isBotMenu: ${isBotMenuMessage} | hasKeywords: ${hasMenuKeywords} | isMenuReply: ${isMenuReply}`);
+        console.log(`[MENU DEBUG] Body: "${body}" | isBotMenu: ${isBotMenuMessage} | hasKeywords: ${hasMenuKeywords}`);
 
         // ==========================================
-        // Handle category selection (1-5)
+        // Handle category selection (1-7)
         // ==========================================
-        if (!isCommand && body.match(/^[1-5]$/) && isMenuReply) {
+        if (!isCommand && body.match(/^[1-7]$/) && isMenuReply) {
             const categoryNum = parseInt(body);
             let categoryMenu = '';
             const botName = await get('BOT_NAME', number) || 'NIM BOT';
@@ -293,17 +289,20 @@ function setupCommandHandlers(socket, number) {
                 case 1:
                     categoryMenu = `*╭─\`📥 DOWNLOAD COMMANDS\`┈⊷*
 *╎*
-*╎ 🎵 .song [song name]*
-*╎    Download songs from YouTube*
+*╎ 🎵 .song [name]*
+*╎    Download songs*
 *╎*
 *╎ 🎬 .tt / .tiktok [url]*
 *╎    Download TikTok videos*
 *╎*
 *╎ 🎬 .yt / .youtube [url] [video/audio]*
-*╎    Download YouTube videos/audio*
+*╎    Download YouTube*
 *╎*
 *╎ 🎬 .fb / .facebook [url]*
 *╎    Download Facebook videos*
+*╎*
+*╎ 📸 .ig / .instagram [url]*
+*╎    Download Instagram posts*
 *╎*
 *╎ 🔗 .tourl / .url*
 *╎    Convert media to URL*
@@ -312,11 +311,11 @@ function setupCommandHandlers(socket, number) {
 *╎    Download View Once media*
 *╎*
 *╎ 📥 .send / .save*
-*╎    Download/Save quoted media*
+*╎    Save quoted media*
 *╎*
 *╰───────────────────────*
 
-💡 *Reply 0 to this message to go back to Main Menu*`;
+💡 *Reply 0 to go back to Main Menu*`;
                     break;
 
                 case 2:
@@ -343,96 +342,163 @@ function setupCommandHandlers(socket, number) {
 *╎ 🟢 .alwaysonline [on/off]*
 *╎    Always online mode*
 *╎*
-*╎ 🔤 .setprefix [new prefix]*
+*╎ 🔗 .antilink [on/off]*
+*╎    Anti-link protection*
+*╎*
+*╎ 👋 .welcome [on/off]*
+*╎    Welcome new members*
+*╎*
+*╎ 🔤 .setprefix [prefix]*
 *╎    Change command prefix*
 *╎*
 *╰───────────────────────*
 
-💡 *Reply 0 to this message to go back to Main Menu*`;
+💡 *Reply 0 to go back to Main Menu*`;
                     break;
 
                 case 3:
                     categoryMenu = `*╭─\`👑 OWNER COMMANDS\`┈⊷*
 *╎*
 *╎ 👤 .owner*
-*╎    Bot owner information*
+*╎    Bot owner info*
 *╎*
-*╎ 🔄 .mode [public/group/inbox/private]*
-*╎    Change bot run mode*
-*╎*
-*╎ ⚙️ .settings*
+*╎ 📋 .settings*
 *╎    View all settings*
 *╎*
-*╎ 🔤 .setprefix [new prefix]*
-*╎    Change command prefix*
+*╎ 🔤 .setprefix [prefix]*
+*╎    Change prefix*
 *╎*
-*╎ 👁️ .autoread [all/cmd/off]*
-*╎    Auto-read settings*
+*╎ 🚪 .logout [number]*
+*╎    Logout a session*
 *╎*
-*╎ 🤖 .autoreply [all/inbox/group/off]*
-*╎    Auto-reply settings*
-*╎*
-*╎ 📷 .autoview [on/off]*
-*╎    Auto-view status*
-*╎*
-*╎ ❤️ .autolike [on/off]*
-*╎    Auto-like status*
-*╎*
-*╎ 🟢 .alwaysonline [on/off]*
-*╎    Always online mode*
+*╎ 🔄 .reconnect [number]*
+*╎    Reconnect session*
 *╎*
 *╰───────────────────────*
 
-💡 *Reply 0 to this message to go back to Main Menu*`;
+💡 *Reply 0 to go back to Main Menu*`;
                     break;
 
                 case 4:
                     categoryMenu = `*╭─\`🛠️ UTILITY COMMANDS\`┈⊷*
 *╎*
 *╎ 🏓 .ping*
-*╎    Check bot response time*
+*╎    Response time*
 *╎*
 *╎ ⏱️ .runtime*
-*╎    Show bot uptime*
+*╎    Bot uptime*
+*╎*
+*╎ 🕐 .time / .date*
+*╎    Current time & date*
 *╎*
 *╎ 📍 .jid*
-*╎    Get JID information*
+*╎    JID information*
 *╎*
 *╎ ❤️ .alive / .status*
-*╎    Check bot status*
+*╎    Bot status*
 *╎*
-*╎ 🗑️ .remsg / .delete / .getdel*
+*╎ 🗑️ .remsg / .delete*
 *╎    Recover deleted message*
 *╎*
-*╎ 📋 .menu / .help*
-*╎    Show this menu*
+*╎ 👤 .whois / .userinfo*
+*╎    User information*
+*╎*
+*╎ 🔐 .password [length]*
+*╎    Generate password*
+*╎*
+*╎ 🔗 .short [url]*
+*╎    Shorten URL*
+*╎*
+*╎ 📱 .qr [text]*
+*╎    Generate QR code*
+*╎*
+*╎ 🌤️ .weather [city]*
+*╎    Weather report*
 *╎*
 *╰───────────────────────*
 
-💡 *Reply 0 to this message to go back to Main Menu*`;
+💡 *Reply 0 to go back to Main Menu*`;
                     break;
 
                 case 5:
-                    categoryMenu = `*╭─\`🤖 AI & OTHER COMMANDS\`┈⊷*
+                    categoryMenu = `*╭─\`🤖 AI & CONVERT COMMANDS\`┈⊷*
 *╎*
 *╎ 🤖 .ai / .gpt [question]*
-*╎    AI Chatbot (Free)*
+*╎    AI Chatbot*
 *╎*
-*╎ ⏱️ .runtime*
-*╎    Show bot uptime*
+*╎ 🌐 .tr [lang]*
+*╎    Translate (reply to msg)*
 *╎*
-*╎ 📋 .menu / .help*
-*╎    Show this menu*
+*╎ 🎨 .imagine [prompt]*
+*╎    AI image generator*
 *╎*
-*╎ 👤 .owner*
-*╎    Bot owner info*
+*╎ 📸 .sticker / .s*
+*╎    Image/Video to sticker*
 *╎*
-*╎ 🏓 .ping*
-*╎    Check response time*
+*╎ 📱 .fakechat [name|msg]*
+*╎    Fake chat image*
+*╎*
+*╎ 📸 .ss [url]*
+*╎    Website screenshot*
 *╎*
 *╰───────────────────────*
 
-💡 *Reply 0 to this message to go back to Main Menu*`;
+💡 *Reply 0 to go back to Main Menu*`;
+                    break;
+
+                case 6:
+                    categoryMenu = `*╭─\`👥 GROUP ADMIN COMMANDS\`┈⊷*
+*╎*
+*╎ 📢 .tagall [msg]*
+*╎    Mention all members*
+*╎*
+*╎ 👢 .kick*
+*╎    Kick member (reply)*
+*╎*
+*╎ 👑 .promote*
+*╎    Make admin (reply)*
+*╎*
+*╎ 👤 .demote*
+*╎    Remove admin (reply)*
+*╎*
+*╎ 🔇 .mute*
+*╎    Mute group*
+*╎*
+*╎ 🔊 .unmute*
+*╎    Unmute group*
+*╎*
+*╎ 📊 .ginfo / .groupinfo*
+*╎    Group information*
+*╎*
+*╰───────────────────────*
+
+💡 *Reply 0 to go back to Main Menu*`;
+                    break;
+
+                case 7:
+                    categoryMenu = `*╭─\`🎮 FUN COMMANDS\`┈⊷*
+*╎*
+*╎ 🎯 .quote*
+*╎    Random motivational quote*
+*╎*
+*╎ 🎲 .dice*
+*╎    Roll a dice*
+*╎*
+*╎ 🎰 .flip*
+*╎    Flip a coin*
+*╎*
+*╎ 😂 .joke*
+*╎    Random joke*
+*╎*
+*╎ 🔢 .random [min] [max]*
+*╎    Random number*
+*╎*
+*╎ 📅 .countdown [date]*
+*╎    Days until date*
+*╎*
+*╰───────────────────────*
+
+💡 *Reply 0 to go back to Main Menu*`;
                     break;
 
                 default:
@@ -446,7 +512,6 @@ function setupCommandHandlers(socket, number) {
             
             if (sentMsg?.key?.id) {
                 menuMessageIds.set(sentMsg.key.id, { type: 'category', num: categoryNum });
-                console.log(`[MENU] Stored category msg ID: ${sentMsg.key.id}`);
             }
             
             userCategoryState.set(sender, categoryNum);
@@ -455,11 +520,9 @@ function setupCommandHandlers(socket, number) {
         }
 
         // ==========================================
-        // Handle "0" to go back to main menu
+        // Handle "0" - Back to main menu
         // ==========================================
         if (!isCommand && body === '0' && isMenuReply) {
-            console.log(`[MENU] ✅ Going back to main menu`);
-            
             const startTime = socketCreationTime.get(number) || Date.now();
             const uptime = Math.floor((Date.now() - startTime) / 1000);
             const hours = Math.floor(uptime / 3600);
@@ -490,7 +553,9 @@ function setupCommandHandlers(socket, number) {
 *╎ 2️⃣ - ⚙️ SETTINGS COMMANDS*
 *╎ 3️⃣ - 👑 OWNER COMMANDS*
 *╎ 4️⃣ - 🛠️ UTILITY COMMANDS*
-*╎ 5️⃣ - 🤖 AI & OTHER COMMANDS*
+*╎ 5️⃣ - 🤖 AI & CONVERT*
+*╎ 6️⃣ - 👥 GROUP ADMIN*
+*╎ 7️⃣ - 🎮 FUN COMMANDS*
 *╎*
 *╰───────────────────────*
 
@@ -511,7 +576,6 @@ Example: Reply \`1\` for Download Commands
             
             if (sentMsg?.key?.id) {
                 menuMessageIds.set(sentMsg.key.id, { type: 'main' });
-                console.log(`[MENU] Stored main menu msg ID: ${sentMsg.key.id}`);
             }
             
             return;
@@ -565,16 +629,46 @@ Example: Reply \`1\` for Download Commands
 
 *\`Thankyou Yaluwe !\`*`);
                 } else if (textLower.includes('payment') || textLower.includes('bank details')) {
-                    await reply(`*💰Payment Details*
+                     await reply(`*💰Payment Details*
 
-💡Bank - Commercial Bank - 8029210301
-💡Bank - Lolc Bank - 03210014631
-💡Bank - NSB - 109090193739
-💡Bank - Dialog Finance - 001021434294
-💡Bank - Peoples Bank - 015200130082418
+💡Bank - Commercial Bank
+Account number - 8029210301
+Name - G.M.Nethmintha Nimsara Jayasooriya
+Branch - Ampara
 
-*🪄EZ CASH* - 0740532742
-*🪙 BINANCE* - id: 842717887`);
+💡Bank - Lolc Bank
+Account number - 03210014631
+Name - G.M.Nethmintha Nimsara
+Branch - Ampara1
+
+💡Bank - NSB
+Account number - 109090193739
+Name - G.M.N.N.JAYASURIYA
+Branch - Ampara 2nd
+
+💡Bank - Dialog Finance PLC
+Account number -  001021434294
+Name - Gardiya Manawaduge Nethmintha Nimsara Jayasooriya
+Branch - Head Office
+
+💡Bank - Peoples Bank
+Account number - 015200130082418
+Name - Nethmintha nimsara
+Branch - branch Ampara - 015
+
+
+*🪄EZ CASH*
+
+0740532742
+
+*Ez Cash දාද්දි වැඩියෙන් rs.20 දාන්න*
+
+*🪙 BINANCE*
+
+id - 842717887
+
+
+*\`Thankyou !\`*`);
                 } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
                     try {
                         const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
@@ -615,7 +709,9 @@ Example: Reply \`1\` for Download Commands
         try {
             switch (command) {
 
+                // ==========================================
                 // Delete message recover
+                // ==========================================
                 case 'remsg':
                 case 'delete':
                 case 'getdel': {
@@ -662,7 +758,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // JID command
+                // ==========================================
                 case 'jid': {
                     const chatJid = msg.key.remoteJid;
                     const senderJid = msg.key.participant || msg.key.remoteJid;
@@ -678,7 +776,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // AI command
+                // ==========================================
                 case 'ai':
                 case 'gpt': {
                     const query = args.join(' ');
@@ -732,7 +832,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // Song command
+                // ==========================================
+                // SONG command
+                // ==========================================
                 case 'song': {
                     const query = args.join(' ');
                     if (!query) return reply(`⚠️ Please provide a song name!\nExample: .song Manike`);
@@ -789,7 +891,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // TikTok command
+                // ==========================================
+                // TIKTOK command
+                // ==========================================
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
@@ -826,7 +930,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // YouTube command
+                // ==========================================
+                // YOUTUBE command
+                // ==========================================
                 case 'yt':
                 case 'youtube': {
                     const url = args[0];
@@ -879,7 +985,9 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // Facebook command
+                // ==========================================
+                // FACEBOOK command
+                // ==========================================
                 case 'fb':
                 case 'facebook': {
                     const url = args[0];
@@ -916,7 +1024,47 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // ToURL command
+                // ==========================================
+                // INSTAGRAM command (NEW)
+                // ==========================================
+                case 'ig':
+                case 'instagram': {
+                    const url = args[0];
+                    if (!url || !url.includes('instagram.com')) {
+                        return reply(`⚠️ Please provide an Instagram link!`);
+                    }
+
+                    await reply(`📥 Downloading Instagram... ⏳`);
+                    try {
+                        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(url)}`, { timeout: 20000 });
+                        const mediaData = apiRes.data?.data;
+                        
+                        if (mediaData && mediaData.length > 0) {
+                            for (const media of mediaData) {
+                                if (media.type === 'video' || (media.url && media.url.includes('.mp4'))) {
+                                    await socket.sendMessage(sender, {
+                                        video: { url: media.url },
+                                        caption: `📸 *Instagram Video*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`
+                                    }, { quoted: msg });
+                                } else {
+                                    await socket.sendMessage(sender, {
+                                        image: { url: media.url },
+                                        caption: `📸 *Instagram Image*\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`
+                                    }, { quoted: msg });
+                                }
+                            }
+                        } else {
+                            return reply(`❌ Instagram download failed!`);
+                        }
+                    } catch (e) {
+                        await reply(`❌ Error: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // TOURL command
+                // ==========================================
                 case 'tourl':
                 case 'url': {
                     try {
@@ -959,7 +1107,485 @@ ${aiAnswer.trim()}
                     break;
                 }
 
+                // ==========================================
+                // TRANSLATE command (NEW)
+                // ==========================================
+                case 'tr':
+                case 'translate': {
+                    const targetLang = args[0] || 'si';
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    
+                    let textToTranslate = '';
+                    
+                    if (quoted?.quotedMessage) {
+                        textToTranslate = quoted.quotedMessage.conversation || 
+                                          quoted.quotedMessage.extendedTextMessage?.text || '';
+                    } else {
+                        textToTranslate = args.slice(1).join(' ');
+                    }
+                    
+                    if (!textToTranslate) {
+                        return reply(`⚠️ Usage: .tr [lang] [text]\nOR reply to a message with .tr [lang]\n\nLanguages: si, ta, en, hi, fr, de, ja, ko, zh`);
+                    }
+                    
+                    try {
+                        const res = await axios.get(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(textToTranslate)}`);
+                        const translated = res.data[0].map(item => item[0]).join('');
+                        
+                        await reply(`🌐 *TRANSLATED (${targetLang.toUpperCase()})*\n\n${translated}`);
+                    } catch (e) {
+                        await reply(`❌ Translation failed!`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // STICKER command (NEW)
+                // ==========================================
+                case 'sticker':
+                case 's': {
+                    try {
+                        const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                        if (!quoted?.quotedMessage) {
+                            return reply(`⚠️ Reply to an image/video with .sticker`);
+                        }
+                        
+                        let qMsg = quoted.quotedMessage;
+                        if (qMsg.ephemeralMessage) qMsg = qMsg.ephemeralMessage.message;
+                        if (qMsg.viewOnceMessage) qMsg = qMsg.viewOnceMessage.message;
+                        
+                        const messageType = Object.keys(qMsg)[0];
+                        
+                        if (!['imageMessage', 'videoMessage'].includes(messageType)) {
+                            return reply(`⚠️ Reply to an image or video!`);
+                        }
+                        
+                        await reply(`⏳ Creating sticker...`);
+                        
+                        const downloadMsg = {
+                            key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
+                            message: { [messageType]: qMsg[messageType] }
+                        };
+                        
+                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        
+                        await socket.sendMessage(sender, {
+                            sticker: buffer
+                        }, { quoted: msg });
+                        
+                    } catch (e) {
+                        await reply(`❌ Sticker failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // QR CODE command (NEW)
+                // ==========================================
+                case 'qr':
+                case 'qrcode': {
+                    const text = args.join(' ');
+                    if (!text) return reply(`⚠️ Usage: .qr [text or URL]`);
+                    
+                    try {
+                        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(text)}`;
+                        
+                        await socket.sendMessage(sender, {
+                            image: { url: qrUrl },
+                            caption: `📱 *QR Code Generated*\n\n📝 Content: ${text}`
+                        }, { quoted: msg });
+                    } catch (e) {
+                        await reply(`❌ QR failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // WEATHER command (NEW)
+                // ==========================================
+                case 'weather': {
+                    const city = args.join(' ');
+                    if (!city) return reply(`⚠️ Usage: .weather [city]\nExample: .weather Colombo`);
+                    
+                    try {
+                        const res = await axios.get(`https://wttr.in/${encodeURIComponent(city)}?format=j1`, { timeout: 15000 });
+                        const data = res.data;
+                        
+                        const current = data.current_condition[0];
+                        const area = data.nearest_area[0];
+                        
+                        const weatherText = `
+🌤️ *WEATHER REPORT*
+
+📍 *City:* ${area.areaName[0].value}
+🌍 *Country:* ${area.country[0].value}
+🌡️ *Temp:* ${current.temp_C}°C (Feels like ${current.FeelsLikeC}°C)
+☁️ *Condition:* ${current.weatherDesc[0].value}
+💧 *Humidity:* ${current.humidity}%
+💨 *Wind:* ${current.windspeedKmph} km/h
+👁️ *Visibility:* ${current.visibility} km
+`;
+                        
+                        await reply(weatherText.trim());
+                    } catch (e) {
+                        await reply(`❌ Weather failed! Check city name.`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // PASSWORD command (NEW)
+                // ==========================================
+                case 'password':
+                case 'genpass': {
+                    const length = parseInt(args[0]) || 16;
+                    if (length < 4 || length > 64) return reply(`⚠️ Length must be 4-64!`);
+                    
+                    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=';
+                    let password = '';
+                    
+                    for (let i = 0; i < length; i++) {
+                        password += chars.charAt(Math.floor(Math.random() * chars.length));
+                    }
+                    
+                    await reply(`🔐 *PASSWORD GENERATED*\n\n\`${password}\`\n\n📏 Length: ${length}\n⚠️ Save it safely!`);
+                    break;
+                }
+
+                // ==========================================
+                // SHORT URL command (NEW)
+                // ==========================================
+                case 'short':
+                case 'shorturl': {
+                    const url = args[0];
+                    if (!url) return reply(`⚠️ Usage: .short [URL]`);
+                    
+                    try {
+                        const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`, { timeout: 10000 });
+                        await reply(`🔗 *SHORT URL*\n\n📎 *Original:* ${url}\n✂️ *Short:* ${res.data}`);
+                    } catch (e) {
+                        await reply(`❌ Short URL failed!`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // SCREENSHOT command (NEW)
+                // ==========================================
+                case 'screenshot':
+                case 'ss': {
+                    const url = args[0];
+                    if (!url) return reply(`⚠️ Usage: .ss [URL]`);
+                    
+                    try {
+                        const ssUrl = `https://api.microlink.io/?url=${encodeURIComponent(url)}&screenshot=true&meta=false&embed=screenshot.url`;
+                        
+                        await socket.sendMessage(sender, {
+                            image: { url: ssUrl },
+                            caption: `📸 *Screenshot of ${url}*`
+                        }, { quoted: msg });
+                    } catch (e) {
+                        await reply(`❌ Screenshot failed!`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // TIME/DATE command (NEW)
+                // ==========================================
+                case 'time':
+                case 'date': {
+                    const now = new Date();
+                    const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Colombo', hour12: true });
+                    const dateStr = now.toLocaleDateString('en-US', { timeZone: 'Asia/Colombo', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+                    
+                    await reply(`🕐 *DATE & TIME*\n\n📅 *Date:* ${dateStr}\n⏰ *Time:* ${timeStr}\n🌍 *Timezone:* Sri Lanka (IST)`);
+                    break;
+                }
+
+                // ==========================================
+                // WHOIS/USERINFO command (NEW)
+                // ==========================================
+                case 'whois':
+                case 'userinfo': {
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    const targetJid = quoted?.participant || msg.key.participant || sender;
+                    
+                    try {
+                        const ppUrl = await socket.profilePictureUrl(targetJid, 'image').catch(() => null);
+                        const status = await socket.fetchStatus(targetJid).catch(() => null);
+                        
+                        const infoText = `
+👤 *USER INFORMATION*
+
+📱 *Number:* ${targetJid.split('@')[0]}
+🆔 *JID:* \`${targetJid}\`
+💭 *Status:* ${status?.status || 'Hidden'}
+🖼️ *Profile Pic:* ${ppUrl ? 'Visible' : 'Hidden'}
+`;
+                        
+                        if (ppUrl) {
+                            await socket.sendMessage(sender, {
+                                image: { url: ppUrl },
+                                caption: infoText.trim()
+                            }, { quoted: msg });
+                        } else {
+                            await reply(infoText.trim());
+                        }
+                    } catch (e) {
+                        await reply(`❌ Info failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // FAKECHAT command (NEW)
+                // ==========================================
+                case 'fakechat': {
+                    const text = args.join(' ');
+                    if (!text || !text.includes('|')) {
+                        return reply(`⚠️ Usage: .fakechat Name|Message\nExample: .fakechat John|Hello`);
+                    }
+                    
+                    const [name, ...msgParts] = text.split('|');
+                    const message = msgParts.join('|');
+                    
+                    try {
+                        const apiUrl = `https://api.nexoracle.com/image-creating/fakechat?name=${encodeURIComponent(name)}&message=${encodeURIComponent(message)}&apikey=free_key`;
+                        
+                        await socket.sendMessage(sender, {
+                            image: { url: apiUrl },
+                            caption: `📱 *Fake Chat Generated*`
+                        }, { quoted: msg });
+                    } catch (e) {
+                        await reply(`❌ Fake chat failed!`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // TAGALL command (NEW)
+                // ==========================================
+                case 'tagall':
+                case 'all': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!`);
+                    
+                    try {
+                        const meta = await socket.groupMetadata(sender);
+                        const customMsg = args.join(' ') || 'Attention everyone!';
+                        let tagText = `📢 *${customMsg}*\n\n`;
+                        const mentions = [];
+                        
+                        meta.participants.forEach((p, i) => {
+                            tagText += `${i+1}. @${p.id.split('@')[0]}\n`;
+                            mentions.push(p.id);
+                        });
+                        
+                        await socket.sendMessage(sender, {
+                            text: tagText,
+                            mentions: mentions
+                        }, { quoted: msg });
+                    } catch (e) {
+                        await reply(`❌ Failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // KICK command (NEW)
+                // ==========================================
+                case 'kick': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!`);
+                    
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted?.participant) return reply(`⚠️ Reply to a user with .kick`);
+                    
+                    try {
+                        await socket.groupParticipantsUpdate(sender, [quoted.participant], 'remove');
+                        await reply(`✅ User kicked!`);
+                    } catch (e) {
+                        await reply(`❌ Kick failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // PROMOTE command (NEW)
+                // ==========================================
+                case 'promote': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!`);
+                    
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted?.participant) return reply(`⚠️ Reply to a user with .promote`);
+                    
+                    try {
+                        await socket.groupParticipantsUpdate(sender, [quoted.participant], 'promote');
+                        await reply(`✅ User promoted to admin!`);
+                    } catch (e) {
+                        await reply(`❌ Promote failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // DEMOTE command (NEW)
+                // ==========================================
+                case 'demote': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!`);
+                    
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted?.participant) return reply(`⚠️ Reply to a user with .demote`);
+                    
+                    try {
+                        await socket.groupParticipantsUpdate(sender, [quoted.participant], 'demote');
+                        await reply(`✅ User demoted!`);
+                    } catch (e) {
+                        await reply(`❌ Demote failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // MUTE command (NEW)
+                // ==========================================
+                case 'mute': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!`);
+                    
+                    try {
+                        await socket.groupSettingUpdate(sender, 'announcement');
+                        await reply(`🔇 Group muted! Only admins can send.`);
+                    } catch (e) {
+                        await reply(`❌ Mute failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // UNMUTE command (NEW)
+                // ==========================================
+                case 'unmute': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!`);
+                    
+                    try {
+                        await socket.groupSettingUpdate(sender, 'not_announcement');
+                        await reply(`🔊 Group unmuted!`);
+                    } catch (e) {
+                        await reply(`❌ Unmute failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // GROUP INFO command (NEW)
+                // ==========================================
+                case 'ginfo':
+                case 'groupinfo': {
+                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!`);
+                    
+                    try {
+                        const meta = await socket.groupMetadata(sender);
+                        const admins = meta.participants.filter(p => p.admin);
+                        
+                        let ppUrl = null;
+                        try { ppUrl = await socket.profilePictureUrl(sender, 'image'); } catch (e) {}
+                        
+                        const infoText = `
+📊 *GROUP INFORMATION*
+
+📝 *Name:* ${meta.subject}
+🆔 *JID:* \`${meta.id}\`
+👥 *Members:* ${meta.participants.length}
+👑 *Admins:* ${admins.length}
+📅 *Created:* ${new Date(meta.creation * 1000).toLocaleDateString()}
+📝 *Description:* ${meta.desc || 'No description'}
+`;
+                        
+                        if (ppUrl) {
+                            await socket.sendMessage(sender, {
+                                image: { url: ppUrl },
+                                caption: infoText.trim()
+                            }, { quoted: msg });
+                        } else {
+                            await reply(infoText.trim());
+                        }
+                    } catch (e) {
+                        await reply(`❌ Failed: ${e.message}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // QUOTE command (NEW)
+                // ==========================================
+                case 'quote': {
+                    const quotes = [
+                        "The only way to do great work is to love what you do. - Steve Jobs",
+                        "Innovation distinguishes between a leader and a follower. - Steve Jobs",
+                        "Life is what happens when you're busy making other plans. - John Lennon",
+                        "The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt",
+                        "It is during our darkest moments that we must focus to see the light. - Aristotle",
+                        "The best time to plant a tree was 20 years ago. The second best time is now.",
+                        "Don't watch the clock; do what it does. Keep going. - Sam Levenson",
+                        "Your time is limited, don't waste it living someone else's life. - Steve Jobs"
+                    ];
+                    
+                    const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
+                    await reply(`💭 *DAILY QUOTE*\n\n${randomQuote}`);
+                    break;
+                }
+
+                // ==========================================
+                // DICE command (NEW)
+                // ==========================================
+                case 'dice': {
+                    const dice = Math.floor(Math.random() * 6) + 1;
+                    await reply(`🎲 *DICE ROLL*\n\nYou got: *${dice}*`);
+                    break;
+                }
+
+                // ==========================================
+                // FLIP COIN command (NEW)
+                // ==========================================
+                case 'flip':
+                case 'coin': {
+                    const result = Math.random() < 0.5 ? 'Heads 🪙' : 'Tails 🪙';
+                    await reply(`🪙 *COIN FLIP*\n\nResult: *${result}*`);
+                    break;
+                }
+
+                // ==========================================
+                // JOKE command (NEW)
+                // ==========================================
+                case 'joke': {
+                    try {
+                        const res = await axios.get('https://official-joke-api.appspot.com/random_joke', { timeout: 10000 });
+                        await reply(`😂 *JOKE*\n\n${res.data.setup}\n\n${res.data.punchline}`);
+                    } catch (e) {
+                        const jokes = [
+                            "Why don't scientists trust atoms? Because they make up everything!",
+                            "What do you call a fake noodle? An impasta!",
+                            "Why did the scarecrow win an award? He was outstanding in his field!",
+                            "I told my wife she was drawing her eyebrows too high. She looked surprised."
+                        ];
+                        await reply(`😂 *JOKE*\n\n${jokes[Math.floor(Math.random() * jokes.length)]}`);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // RANDOM NUMBER command (NEW)
+                // ==========================================
+                case 'random': {
+                    const min = parseInt(args[0]) || 1;
+                    const max = parseInt(args[1]) || 100;
+                    const random = Math.floor(Math.random() * (max - min + 1)) + min;
+                    await reply(`🔢 *RANDOM NUMBER*\n\nRange: ${min} - ${max}\nResult: *${random}*`);
+                    break;
+                }
+
+                // ==========================================
                 // MENU command
+                // ==========================================
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
@@ -992,7 +1618,9 @@ ${aiAnswer.trim()}
 *╎ 2️⃣ - ⚙️ SETTINGS COMMANDS*
 *╎ 3️⃣ - 👑 OWNER COMMANDS*
 *╎ 4️⃣ - 🛠️ UTILITY COMMANDS*
-*╎ 5️⃣ - 🤖 AI & OTHER COMMANDS*
+*╎ 5️⃣ - 🤖 AI & CONVERT*
+*╎ 6️⃣ - 👥 GROUP ADMIN*
+*╎ 7️⃣ - 🎮 FUN COMMANDS*
 *╎*
 *╰───────────────────────*
 
@@ -1025,7 +1653,7 @@ Example: Reply \`1\` for Download Commands
 
                     const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
                     if (audioBuffer) {
-                        const audioSent = await socket.sendMessage(sender, {
+                        await socket.sendMessage(sender, {
                             audio: audioBuffer,
                             mimetype: 'audio/mpeg',
                             ptt: false
@@ -1034,7 +1662,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Mode command
+                // ==========================================
                 case 'mode': {
                     if (!msg.key.fromMe) {
                         return reply(`⚠️ Only Bot Owner! ❌`);
@@ -1052,7 +1682,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Ping command
+                // ==========================================
                 case 'ping': {
                     const start = Date.now();
                     const sentMsg = await socket.sendMessage(sender, { text: 'Pinging...' }, { quoted: msg });
@@ -1061,7 +1693,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Autoread command
+                // ==========================================
                 case 'autoread': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
 
@@ -1077,7 +1711,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Autoreply command
+                // ==========================================
                 case 'autoreply': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
 
@@ -1093,7 +1729,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Alive/Status command
+                // ==========================================
                 case 'alive':
                 case 'status': {
                     const startTime = socketCreationTime.get(number) || Date.now();
@@ -1122,7 +1760,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Runtime command
+                // ==========================================
                 case 'runtime': {
                     const startTime = socketCreationTime.get(number) || Date.now();
                     const uptime = Math.floor((Date.now() - startTime) / 1000);
@@ -1133,13 +1773,17 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Owner command
+                // ==========================================
                 case 'owner': {
                     await reply(`👑 *Bot Owner*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`);
                     break;
                 }
 
+                // ==========================================
                 // Send/Save command
+                // ==========================================
                 case 'send':
                 case 'save': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
@@ -1187,7 +1831,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // View Once command
+                // ==========================================
                 case 'vv':
                 case 'viewonce': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
@@ -1228,7 +1874,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Set prefix command
+                // ==========================================
                 case 'setprefix': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
                     const newPrefix = args[0];
@@ -1237,13 +1885,17 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Settings command
+                // ==========================================
                 case 'settings': {
                     const pfx = await get('PREFIX', number) || '.';
                     const bName = await get('BOT_NAME', number) || 'NIM BOT';
                     const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
                     const autoLike = await get('AUTO_LIKE_STATUS', number) ?? 'true';
                     const alwaysOnline = await get('ALWAYS_ONLINE', number) ?? 'true';
+                    const antiLink = await get('ANTI_LINK', number) ?? 'off';
+                    const welcome = await get('WELCOME_MSG', number) ?? 'off';
 
                     await reply(`⚙️ *${bName} SETTINGS*
 
@@ -1252,16 +1904,22 @@ Example: Reply \`1\` for Download Commands
 > Auto View: *${autoView}*
 > Auto Like: *${autoLike}*
 > Always Online: *${alwaysOnline}*
+> Anti-Link: *${antiLink}*
+> Welcome: *${welcome}*
 
 🛠️ *Commands:*
 • ${pfx}autoview [on/off]
 • ${pfx}autolike [on/off]
 • ${pfx}alwaysonline [on/off]
+• ${pfx}antilink [on/off]
+• ${pfx}welcome [on/off]
 • ${pfx}setprefix [prefix]`);
                     break;
                 }
 
+                // ==========================================
                 // Auto view command
+                // ==========================================
                 case 'autoview': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
                     const val = args[0]?.toLowerCase();
@@ -1273,7 +1931,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Auto like command
+                // ==========================================
                 case 'autolike': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
                     const val = args[0]?.toLowerCase();
@@ -1285,7 +1945,9 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
                 // Always online command
+                // ==========================================
                 case 'alwaysonline': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
                     const val = args[0]?.toLowerCase();
@@ -1297,11 +1959,76 @@ Example: Reply \`1\` for Download Commands
                     break;
                 }
 
+                // ==========================================
+                // Anti-Link command
+                // ==========================================
+                case 'antilink': {
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
+                    const val = args[0]?.toLowerCase();
+                    if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
+                        const current = await get('ANTI_LINK', number) || 'off';
+                        return reply(`🔗 *Anti-Link*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .antilink on/off`);
+                    }
+                    const normalized = (val === 'on' || val === 'true') ? 'on' : 'off';
+                    await handleSettingUpdate("ANTI_LINK", normalized, reply, number);
+                    break;
+                }
+
+                // ==========================================
+                // Welcome command
+                // ==========================================
+                case 'welcome': {
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner! ❌`);
+                    const val = args[0]?.toLowerCase();
+                    if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
+                        const current = await get('WELCOME_MSG', number) || 'off';
+                        return reply(`👋 *Welcome Message*\n\nCurrent: *${current.toUpperCase()}*\n\nUsage: .welcome on/off`);
+                    }
+                    const normalized = (val === 'on' || val === 'true') ? 'on' : 'off';
+                    await handleSettingUpdate("WELCOME_MSG", normalized, reply, number);
+                    break;
+                }
+
                 default:
                     break;
             }
         } catch (error) {
             console.error('Command execution error:', error);
+        }
+    });
+
+    // ==========================================
+    // ANTI-LINK + WELCOME SYSTEM
+    // ==========================================
+    socket.ev.on('group-participants.update', async (update) => {
+        try {
+            const { id, participants, action } = update;
+            
+            const welcomeEnabled = await get('WELCOME_MSG', number) || 'off';
+            if (welcomeEnabled !== 'on') return;
+            
+            const groupMeta = await socket.groupMetadata(id);
+            const groupName = groupMeta.subject;
+            
+            for (const participant of participants) {
+                const userJid = participant;
+                const userName = userJid.split('@')[0];
+                
+                if (action === 'add') {
+                    await socket.sendMessage(id, {
+                        image: { url: BOT_IMAGE_URL },
+                        text: `🎉 *WELCOME* @${userName}!\n\n👋 Welcome to *${groupName}*\n\n📢 Please read group rules!`,
+                        mentions: [userJid]
+                    });
+                } else if (action === 'remove') {
+                    await socket.sendMessage(id, {
+                        text: `👋 *GOODBYE* @${userName}!\n\n😢 We'll miss you!`,
+                        mentions: [userJid]
+                    });
+                }
+            }
+        } catch (e) {
+            console.log("Group welcome error:", e.message);
         }
     });
 }
@@ -1401,7 +2128,7 @@ async function restoreExistingSessions() {
 }
 
 // ==========================================
-// 🔥 Start Bot Function - WITH CONNECT MESSAGE FIX
+// Start Bot Function
 // ==========================================
 async function StartBot(number, res = null, isRestore = false) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
@@ -1431,15 +2158,10 @@ async function StartBot(number, res = null, isRestore = false) {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // 🔥 Flag to prevent duplicate connect messages
         let connectMessageSent = false;
 
-        // 🔥 Helper function to send connect message
         const sendConnectMessage = async (currentSock, botNumber) => {
-            if (connectMessageSent) {
-                console.log(`[CONNECT MSG] Already sent for ${botNumber}, skipping`);
-                return;
-            }
+            if (connectMessageSent) return;
             connectMessageSent = true;
 
             try {
@@ -1450,12 +2172,10 @@ async function StartBot(number, res = null, isRestore = false) {
                     currentPrefix = await get('PREFIX', botNumber) || '.';
                 } catch (e) { }
 
-                // 🔥 Send to OWN number (self-chat)
                 const ownJid = `${botNumber}@s.whatsapp.net`;
                 
-                console.log(`[CONNECT MSG] 📤 Sending to own number: ${ownJid}`);
+                console.log(`[CONNECT MSG] 📤 Sending to: ${ownJid}`);
 
-                // Send image + caption
                 await currentSock.sendMessage(ownJid, {
                     image: { url: BOT_IMAGE_URL },
                     caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${botNumber}*\n• Prefix: *${currentPrefix}*\n\nType *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> Creator: *Nimsara*`,
@@ -1470,11 +2190,8 @@ async function StartBot(number, res = null, isRestore = false) {
                     }
                 });
 
-                console.log(`[CONNECT MSG] ✅ Image sent`);
-
                 await delay(1500);
 
-                // Send audio
                 const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
                 if (audioBuffer) {
                     await currentSock.sendMessage(ownJid, {
@@ -1482,14 +2199,13 @@ async function StartBot(number, res = null, isRestore = false) {
                         mimetype: 'audio/mpeg',
                         ptt: false
                     });
-                    console.log(`[CONNECT MSG] ✅ Audio sent`);
                 }
 
-                console.log(`[CONNECT MSG] 🎉 All messages sent to ${ownJid}`);
+                console.log(`[CONNECT MSG] 🎉 Sent to ${ownJid}`);
 
             } catch (err) {
                 console.log(`[CONNECT MSG] ❌ Error:`, err.message);
-                connectMessageSent = false; // Allow retry
+                connectMessageSent = false;
             }
         };
 
@@ -1509,14 +2225,12 @@ async function StartBot(number, res = null, isRestore = false) {
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
 
-                // 🔥 Send connect message ONLY for new connections (not restores)
                 if (!isRestore) {
-                    // Wait a bit for socket to fully stabilize, then send
                     setTimeout(() => {
                         sendConnectMessage(sock, sanitizedNumber);
                     }, 3000);
                 } else {
-                    console.log(`✅ Session restored for ${sanitizedNumber} (no connect message)`);
+                    console.log(`✅ Session restored for ${sanitizedNumber}`);
                 }
 
                 if (res && typeof res.send === 'function' && !res.headersSent) {
@@ -1544,7 +2258,6 @@ async function StartBot(number, res = null, isRestore = false) {
         setupCommandHandlers(sock, sanitizedNumber);
         setupStatusAndPresenceHandlers(sock, sanitizedNumber);
 
-        // 🔥 PAIRING CODE LOGIC
         if (!sock.authState.creds.registered) {
             if (isRestore) {
                 setTimeout(() => {
@@ -1559,13 +2272,11 @@ async function StartBot(number, res = null, isRestore = false) {
             try {
                 let code = await sock.requestPairingCode(sanitizedNumber);
                 
-                // 🔥 Send pairing code FIRST
                 if (res && typeof res.send === 'function' && !res.headersSent) {
                     res.send({ code });
                 }
 
-                // 🔥 Then wait for connection to open (handled by connection.update event above)
-                console.log(`✅ Pairing code sent: ${code}, waiting for connection...`);
+                console.log(`✅ Pairing code sent: ${code}`);
 
             } catch (err) {
                 if (res && typeof res.status === 'function' && !res.headersSent) {
@@ -1573,7 +2284,6 @@ async function StartBot(number, res = null, isRestore = false) {
                 }
             }
         } else {
-            // Already registered - just send status
             if (res && typeof res.send === 'function' && !res.headersSent) {
                 return res.send({ status: "Already connected", number: sanitizedNumber });
             }
