@@ -265,7 +265,6 @@ function setupCommandHandlers(socket, number) {
         }
 
         // 🔥 FIXED: Check if quoted message is from bot using stored menu IDs
-        // This is more reliable than JID matching
         const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
         
         // Also check by menu text keywords as backup
@@ -440,13 +439,11 @@ function setupCommandHandlers(socket, number) {
                     return;
             }
 
-            // Send category menu and store its ID for further replies
             const sentMsg = await socket.sendMessage(sender, {
                 text: categoryMenu.trim(),
                 contextInfo: channelInfo
             }, { quoted: msg });
             
-            // Store this category message ID so "0" reply works
             if (sentMsg?.key?.id) {
                 menuMessageIds.set(sentMsg.key.id, { type: 'category', num: categoryNum });
                 console.log(`[MENU] Stored category msg ID: ${sentMsg.key.id}`);
@@ -512,7 +509,6 @@ Example: Reply \`1\` for Download Commands
                 contextInfo: channelInfo
             }, { quoted: msg });
             
-            // Store main menu message ID
             if (sentMsg?.key?.id) {
                 menuMessageIds.set(sentMsg.key.id, { type: 'main' });
                 console.log(`[MENU] Stored main menu msg ID: ${sentMsg.key.id}`);
@@ -883,7 +879,8 @@ ${aiAnswer.trim()}
                     break;
                 }
 
-                // Facebook command                case 'fb':
+                // Facebook command
+                case 'fb':
                 case 'facebook': {
                     const url = args[0];
                     if (!url || (!url.includes('facebook.com') && !url.includes('fb.watch') && !url.includes('fb.me'))) {
@@ -1008,19 +1005,16 @@ Example: Reply \`1\` for Download Commands
 > _MADE BY NIMSARA_
 `;
 
-                    // Send menu and store its message ID
                     const sentMsg = await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
                         caption: captionText.trim(),
                         contextInfo: channelInfo
                     }, { quoted: msg });
 
-                    // 🔥 Store menu message ID
                     if (sentMsg?.key?.id) {
                         menuMessageIds.set(sentMsg.key.id, { type: 'main', timestamp: Date.now() });
                         console.log(`[MENU] ✅ Stored main menu ID: ${sentMsg.key.id}`);
                         
-                        // Cleanup old menu IDs (keep last 100)
                         if (menuMessageIds.size > 100) {
                             const oldest = menuMessageIds.keys().next().value;
                             menuMessageIds.delete(oldest);
@@ -1407,7 +1401,7 @@ async function restoreExistingSessions() {
 }
 
 // ==========================================
-// Start Bot Function
+// 🔥 Start Bot Function - WITH CONNECT MESSAGE FIX
 // ==========================================
 async function StartBot(number, res = null, isRestore = false) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
@@ -1437,6 +1431,68 @@ async function StartBot(number, res = null, isRestore = false) {
 
         sock.ev.on('creds.update', saveCreds);
 
+        // 🔥 Flag to prevent duplicate connect messages
+        let connectMessageSent = false;
+
+        // 🔥 Helper function to send connect message
+        const sendConnectMessage = async (currentSock, botNumber) => {
+            if (connectMessageSent) {
+                console.log(`[CONNECT MSG] Already sent for ${botNumber}, skipping`);
+                return;
+            }
+            connectMessageSent = true;
+
+            try {
+                let botName = 'NIM BOT';
+                let currentPrefix = '.';
+                try {
+                    botName = await get('BOT_NAME', botNumber) || 'NIM BOT';
+                    currentPrefix = await get('PREFIX', botNumber) || '.';
+                } catch (e) { }
+
+                // 🔥 Send to OWN number (self-chat)
+                const ownJid = `${botNumber}@s.whatsapp.net`;
+                
+                console.log(`[CONNECT MSG] 📤 Sending to own number: ${ownJid}`);
+
+                // Send image + caption
+                await currentSock.sendMessage(ownJid, {
+                    image: { url: BOT_IMAGE_URL },
+                    caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${botNumber}*\n• Prefix: *${currentPrefix}*\n\nType *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> Creator: *Nimsara*`,
+                    contextInfo: {
+                        forwardingScore: 999,
+                        isForwarded: true,
+                        forwardedNewsletterMessageInfo: {
+                            newsletterJid: '120363362308230584@newsletter',
+                            newsletterName: 'NIM PROJECT',
+                            serverMessageId: 100
+                        }
+                    }
+                });
+
+                console.log(`[CONNECT MSG] ✅ Image sent`);
+
+                await delay(1500);
+
+                // Send audio
+                const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
+                if (audioBuffer) {
+                    await currentSock.sendMessage(ownJid, {
+                        audio: audioBuffer,
+                        mimetype: 'audio/mpeg',
+                        ptt: false
+                    });
+                    console.log(`[CONNECT MSG] ✅ Audio sent`);
+                }
+
+                console.log(`[CONNECT MSG] 🎉 All messages sent to ${ownJid}`);
+
+            } catch (err) {
+                console.log(`[CONNECT MSG] ❌ Error:`, err.message);
+                connectMessageSent = false; // Allow retry
+            }
+        };
+
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
@@ -1453,43 +1509,14 @@ async function StartBot(number, res = null, isRestore = false) {
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
 
+                // 🔥 Send connect message ONLY for new connections (not restores)
                 if (!isRestore) {
-                    try {
-                        await delay(2000);
-                        let botName = 'NIM BOT';
-                        let currentPrefix = '.';
-                        try {
-                            botName = await get('BOT_NAME', sanitizedNumber) || 'NIM BOT';
-                            currentPrefix = await get('PREFIX', sanitizedNumber) || '.';
-                        } catch (e) { }
-
-                        await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
-                            image: { url: BOT_IMAGE_URL },
-                            caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online!\n\n• Name: *${botName}*\n• Number: *${sanitizedNumber}*\n• Prefix: *${currentPrefix}*\n\nType *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}`,
-                            contextInfo: {
-                                forwardingScore: 999,
-                                isForwarded: true,
-                                forwardedNewsletterMessageInfo: {
-                                    newsletterJid: '120363362308230584@newsletter',
-                                    newsletterName: 'NIM PROJECT',
-                                    serverMessageId: 100
-                                }
-                            }
-                        });
-
-                        await delay(1500);
-
-                        const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
-                        if (audioBuffer) {
-                            await sock.sendMessage(`${sanitizedNumber}@s.whatsapp.net`, {
-                                audio: audioBuffer,
-                                mimetype: 'audio/mpeg',
-                                ptt: false
-                            });
-                        }
-                    } catch (err) {
-                        console.log("Connect msg error:", err.message);
-                    }
+                    // Wait a bit for socket to fully stabilize, then send
+                    setTimeout(() => {
+                        sendConnectMessage(sock, sanitizedNumber);
+                    }, 3000);
+                } else {
+                    console.log(`✅ Session restored for ${sanitizedNumber} (no connect message)`);
                 }
 
                 if (res && typeof res.send === 'function' && !res.headersSent) {
@@ -1517,6 +1544,7 @@ async function StartBot(number, res = null, isRestore = false) {
         setupCommandHandlers(sock, sanitizedNumber);
         setupStatusAndPresenceHandlers(sock, sanitizedNumber);
 
+        // 🔥 PAIRING CODE LOGIC
         if (!sock.authState.creds.registered) {
             if (isRestore) {
                 setTimeout(() => {
@@ -1530,19 +1558,27 @@ async function StartBot(number, res = null, isRestore = false) {
             await delay(3000);
             try {
                 let code = await sock.requestPairingCode(sanitizedNumber);
+                
+                // 🔥 Send pairing code FIRST
                 if (res && typeof res.send === 'function' && !res.headersSent) {
-                    return res.send({ code });
+                    res.send({ code });
                 }
+
+                // 🔥 Then wait for connection to open (handled by connection.update event above)
+                console.log(`✅ Pairing code sent: ${code}, waiting for connection...`);
+
             } catch (err) {
                 if (res && typeof res.status === 'function' && !res.headersSent) {
                     return res.status(500).send({ error: err.message });
                 }
             }
         } else {
+            // Already registered - just send status
             if (res && typeof res.send === 'function' && !res.headersSent) {
                 return res.send({ status: "Already connected", number: sanitizedNumber });
             }
         }
+
     } catch (error) {
         console.error("❌ StartBot error:", error.message);
         if (res && typeof res.status === 'function' && !res.headersSent) {
