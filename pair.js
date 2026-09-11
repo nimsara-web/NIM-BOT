@@ -491,7 +491,6 @@ function setupCommandHandlers(socket, number) {
 *╎ 📸 .ig / .instagram [url]*
 *╎ 🔗 .tourl / .url*
 *╎ 📸 .vv / .viewonce*
-*╎ 📸 .vvp - ViewOnce to Owner*
 *╎ 📥 .send / .save*
 *╰───────────────────────*
 
