@@ -539,7 +539,6 @@ ${messageText}
 *╎ 📸 .ig / .instagram [url]*
 *╎ 🔗 .tourl / .url*
 *╎ 📸 .vv / .viewonce*
-*╎ 📸 .vvp - To Owner*
 *╎ 📥 .send / .save*
 *╰───────────────────────*
 
@@ -777,14 +776,44 @@ ${messageText}
                 else if (textLower.includes('payment') || textLower.includes('bank details')) {
                     await reply(`*💰Payment Details*
 
-💡Bank - Commercial Bank - 8029210301
-💡Bank - Lolc Bank - 03210014631
-💡Bank - NSB - 109090193739
-💡Bank - Dialog Finance - 001021434294
-💡Bank - Peoples Bank - 015200130082418
+💡Bank - Commercial Bank
+Account number - 8029210301
+Name - G.M.Nethmintha Nimsara Jayasooriya
+Branch - Ampara
 
-*🪄EZ CASH* - 0740532742
-*🪙 BINANCE* - id: 842717887` + FOOTER);
+💡Bank - Lolc Bank
+Account number - 03210014631
+Name - G.M.Nethmintha Nimsara
+Branch - Ampara1
+
+💡Bank - NSB
+Account number - 109090193739
+Name - G.M.N.N.JAYASURIYA
+Branch - Ampara 2nd
+
+💡Bank - Dialog Finance PLC
+Account number -  001021434294
+Name - Gardiya Manawaduge Nethmintha Nimsara Jayasooriya
+Branch - Head Office
+
+💡Bank - Peoples Bank
+Account number - 015200130082418
+Name - Nethmintha nimsara
+Branch - branch Ampara - 015
+
+
+*🪄EZ CASH*
+
+0740532742
+
+*Ez Cash දාද්දි වැඩියෙන් rs.20 දාන්න*
+
+*🪙 BINANCE*
+
+id - 842717887
+
+
+*\`Thankyou !\`*` + FOOTER);
                 } 
                 else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || 
                          textLower.includes('nimsara')) {
