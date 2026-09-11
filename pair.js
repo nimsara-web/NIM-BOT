@@ -34,7 +34,7 @@ const BOT_IMAGE_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main
 const BOT_AUDIO_URL = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcome%20nim%20new.MP3';
 const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r';
 const CHANNEL_JID = '120363362308230584@newsletter';
-const OWNER_NUMBER = '94784280074';
+const DEFAULT_OWNER_NUMBER = '94784280074';
 
 const FOOTER = '\n\n> *Creator by Nimsara* 🧛🏻';
 
@@ -47,9 +47,18 @@ const userCategoryState = new Map();
 const menuMessageIds = new Map();
 const groupAntiLink = new Map();
 const groupWelcome = new Map();
-
-// 🔥 NEW: Per-chat nodelete settings
 const chatNodelete = new Map();
+
+// ==========================================
+// 🔥 Get Owner Number from DB (per bot session)
+// ==========================================
+async function getOwnerNumber(botNumber) {
+    try {
+        const ownerNum = await get(`OWNER_NUMBER`, botNumber);
+        if (ownerNum) return ownerNum.replace(/[^0-9]/g, '');
+    } catch (e) {}
+    return DEFAULT_OWNER_NUMBER;
+}
 
 // ==========================================
 // Get message body
@@ -79,6 +88,41 @@ async function getAudioBuffer(url) {
         console.error("Error downloading audio buffer:", e.message);
         return null;
     }
+}
+
+// ==========================================
+// 🔥 Channel Forward Context Info (for all messages)
+// ==========================================
+function getChannelContext() {
+    return {
+        forwardingScore: 999,
+        isForwarded: true,
+        forwardedNewsletterMessageInfo: {
+            newsletterJid: CHANNEL_JID,
+            newsletterName: 'NIM PROJECT',
+            serverMessageId: 100
+        }
+    };
+}
+
+// ==========================================
+// 🔥 Bot Detection Bypass Helpers
+// ==========================================
+async function humanDelay(minMs = 1500, maxMs = 3500) {
+    const randomDelay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+    await delay(randomDelay);
+}
+
+async function sendWithTyping(sock, jid, message, options = {}) {
+    try {
+        // Send typing indicator
+        await sock.sendPresenceUpdate('composing', jid);
+        await humanDelay(800, 1800);
+        await sock.sendPresenceUpdate('paused', jid);
+        await delay(300);
+    } catch (e) {}
+    
+    return await sock.sendMessage(jid, message, options);
 }
 
 // ==========================================
@@ -125,7 +169,6 @@ async function downloadTikTok(tiktokUrl) {
         if (url && url.startsWith('http')) return url;
     } catch (e) {}
 
-    // [FREE API]
     try {
         const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 20000 });
         const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url;
@@ -142,7 +185,6 @@ async function downloadFacebook(fbUrl) {
         if (url && url.startsWith('http')) return url;
     } catch (e) {}
 
-    // [FREE API]
     try {
         const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`, { timeout: 20000 });
         const url = apiRes.data?.data?.hd || apiRes.data?.data?.sd || apiRes.data?.url;
@@ -153,7 +195,6 @@ async function downloadFacebook(fbUrl) {
 }
 
 async function downloadInstagram(igUrl) {
-    // [FREE API]
     try {
         const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(igUrl)}`, { timeout: 25000 });
         const mediaData = apiRes.data?.data;
@@ -165,24 +206,11 @@ async function downloadInstagram(igUrl) {
 }
 
 async function askAI(query) {
-    // [FREE APIs] - Multiple fallbacks
     const apis = [
-        {
-            url: `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`,
-            extract: (d) => d?.result || d?.gpt || d?.answer
-        },
-        {
-            url: `https://api.affiliateplus.xyz/api/gpt?query=${encodeURIComponent(query)}`,
-            extract: (d) => d?.reply || d?.response
-        },
-        {
-            url: `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`,
-            extract: (d) => d?.data || d?.response
-        },
-        {
-            url: `https://delirius-apiofc.vercel.app/ai/gpt4?q=${encodeURIComponent(query)}`,
-            extract: (d) => d?.data || d?.response
-        }
+        { url: `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`, extract: (d) => d?.result || d?.gpt || d?.answer },
+        { url: `https://api.affiliateplus.xyz/api/gpt?query=${encodeURIComponent(query)}`, extract: (d) => d?.reply || d?.response },
+        { url: `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response },
+        { url: `https://delirius-apiofc.vercel.app/ai/gpt4?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response }
     ];
 
     for (const api of apis) {
@@ -195,22 +223,11 @@ async function askAI(query) {
     return null;
 }
 
-// 🔥 NEW: Generate AI Image with Free APIs
 async function generateAIImage(prompt) {
-    // [FREE APIs] - Multiple fallbacks
     const apis = [
-        {
-            url: `https://api.siputzx.my.id/api/ai/stable-diffusion?prompt=${encodeURIComponent(prompt)}`,
-            extract: (d) => d?.data?.url || d?.result || d?.url
-        },
-        {
-            url: `https://api.nekosia.cat/api/v1/images/text2image?prompt=${encodeURIComponent(prompt)}`,
-            extract: (d) => d?.image?.url || d?.url
-        },
-        {
-            url: `https://api.siputzx.my.id/api/ai/imagen?prompt=${encodeURIComponent(prompt)}`,
-            extract: (d) => d?.data?.url || d?.result
-        }
+        { url: `https://api.siputzx.my.id/api/ai/stable-diffusion?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.data?.url || d?.result || d?.url },
+        { url: `https://api.nekosia.cat/api/v1/images/text2image?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.image?.url || d?.url },
+        { url: `https://api.siputzx.my.id/api/ai/imagen?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.data?.url || d?.result }
     ];
 
     for (const api of apis) {
@@ -223,9 +240,7 @@ async function generateAIImage(prompt) {
     return null;
 }
 
-// 🔥 NEW: Generate Fake Chat Image with Free APIs
 async function generateFakeChat(name, message) {
-    // [FREE APIs]
     const apis = [
         `https://api.siputzx.my.id/api/m/fakechat?name=${encodeURIComponent(name)}&message=${encodeURIComponent(message)}`,
         `https://api.siputzx.my.id/api/m/fakechat/iphone?name=${encodeURIComponent(name)}&message=${encodeURIComponent(message)}`,
@@ -345,7 +360,6 @@ function setupCommandHandlers(socket, number) {
                             timestamp: Date.now()
                         });
 
-                        // 🔥 NEW: Auto-resend if nodelete is ON for this chat
                         const nodeleteStatus = chatNodelete.get(chatJid) || await get(`NODELETE_${chatJid}`, number) || 'off';
                         
                         if (nodeleteStatus === 'on') {
@@ -360,9 +374,10 @@ ${messageText}
 
 > _Auto-recovered by NIM BOT_${FOOTER}`;
 
-                                await socket.sendMessage(chatJid, {
+                                await sendWithTyping(socket, chatJid, {
                                     text: resendText,
-                                    mentions: [senderJid]
+                                    mentions: [senderJid],
+                                    contextInfo: getChannelContext()
                                 });
 
                                 console.log(`[NODELETE] ✅ Auto-resent deleted msg in ${chatJid}`);
@@ -412,15 +427,7 @@ ${messageText}
             await socket.readMessages([msg.key]);
         }
 
-        const channelInfo = {
-            forwardingScore: 999,
-            isForwarded: true,
-            forwardedNewsletterMessageInfo: {
-                newsletterJid: CHANNEL_JID,
-                newsletterName: 'NIM PROJECT',
-                serverMessageId: 100
-            }
-        };
+        const channelInfo = getChannelContext();
 
         const reply = async (content, quotedMsg = msg, reactEmoji = true) => {
             let messagePayload;
@@ -487,7 +494,8 @@ ${messageText}
 👤 @${userName}
 ⚠️ Links are not allowed in this group!
 🔗 *Anti-Link: ON*` + FOOTER,
-                                    mentions: [msg.key.participant]
+                                    mentions: [msg.key.participant],
+                                    contextInfo: channelInfo
                                 });
                             } catch (e) {}
                         }
@@ -539,6 +547,7 @@ ${messageText}
 *╎ 📸 .ig / .instagram [url]*
 *╎ 🔗 .tourl / .url*
 *╎ 📸 .vv / .viewonce*
+*╎ 📸 .vvp / .vvpowner*
 *╎ 📥 .send / .save*
 *╰───────────────────────*
 
@@ -569,6 +578,7 @@ ${messageText}
 *╎ 📋 .settings*
 *╎ 📊 .active*
 *╎ 🔗 .pair [number]*
+*╎ 📞 .vvpowner [number]*
 *╎ 🔤 .setprefix [prefix]*
 *╎ 💾 .setreply [trigger] [response]*
 *╎ 📝 .note save [name] [content]*
@@ -744,27 +754,17 @@ ${messageText}
                 const hasExactWord = (keyword) => words.includes(keyword);
                 const isExactMessage = (phrase) => textLower === phrase;
 
-                if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || 
-                    isExactMessage('හායි') || isExactMessage('hello')) {
+                if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || isExactMessage('හායි') || isExactMessage('hello')) {
                     await reply('Hi! 👋' + FOOTER);
-                } 
-                else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නෙ') || 
-                         isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
+                } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නෙ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
                     await reply('Mokuth Na innwa😊' + FOOTER);
-                } 
-                else if (hasExactWord('gm') || isExactMessage('good morning') || 
-                         isExactMessage('ගුඩ් මොර්නින්ග්')) {
+                } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මොර්නින්ග්')) {
                     await reply('Good Morning🌤️' + FOOTER);
-                } 
-                else if (hasExactWord('gn') || isExactMessage('good night') || 
-                         isExactMessage('ගුඩ් නයිට්')) {
+                } else if (hasExactWord('gn') || isExactMessage('good night') || isExactMessage('ගුඩ් නයිට්')) {
                     await reply('Good Night✨' + FOOTER);
-                } 
-                else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || 
-                         isExactMessage('good bye')) {
+                } else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || isExactMessage('good bye')) {
                     await reply('Bye🍻' + FOOTER);
-                } 
-                else if (textLower.includes('r2k') || textLower.includes('pawara')) {
+                } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
                     await reply(`*🔥 R2K Gaming Channels 🔥*
 
 💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
@@ -772,8 +772,7 @@ ${messageText}
 💓Fb - https://www.facebook.com/profile.php?id=61581297341821
 
 *\`Thankyou Yaluwe !\`*` + FOOTER);
-                } 
-                else if (textLower.includes('payment') || textLower.includes('bank details')) {
+                } else if (textLower.includes('payment') || textLower.includes('bank details')) {
                     await reply(`*💰Payment Details*
 
 💡Bank - Commercial Bank
@@ -814,9 +813,7 @@ id - 842717887
 
 
 *\`Thankyou !\`*` + FOOTER);
-                } 
-                else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || 
-                         textLower.includes('nimsara')) {
+                } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
                     try {
                         const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
                         const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
@@ -855,6 +852,49 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
+                // 🔥 NEW: .vvpowner - Set owner number for .vvp
+                // ==========================================
+                case 'vvpowner':
+                case 'setvvpowner':
+                case 'setowner': {
+                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    
+                    const newOwnerNumber = args[0]?.replace(/[^0-9]/g, '');
+                    
+                    if (!newOwnerNumber) {
+                        const currentOwner = await getOwnerNumber(number);
+                        return reply(`📞 *VVP OWNER SETTINGS*
+
+📊 *Current Owner:* +${currentOwner}
+
+*Usage:* \`.vvpowner [number]\`
+*Example:* \`.vvpowner 94784280074\`
+
+💡 This number will receive all ViewOnce media via .vvp command!` + FOOTER);
+                    }
+                    
+                    if (newOwnerNumber.length < 9 || newOwnerNumber.length > 15) {
+                        return reply(`❌ *Invalid number!*
+
+📝 Format: 94784280074
+📏 Length: 9-15 digits` + FOOTER);
+                    }
+                    
+                    try {
+                        await handleSettingUpdate("OWNER_NUMBER", newOwnerNumber, reply, number);
+                        
+                        await reply(`✅ *VVP OWNER UPDATED!*
+
+📱 *New Owner:* +${newOwnerNumber}
+
+💡 Now all .vvp media will be sent to this number!` + FOOTER);
+                    } catch (e) {
+                        await reply(`❌ Failed to save: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
                 // 🔥 .pair - Generate pairing code from bot
                 // ==========================================
                 case 'pair':
@@ -872,7 +912,6 @@ id - 842717887
 ⏳ *Please wait...*` + FOOTER);
                     
                     try {
-                        // Create a temporary socket for pairing
                         const sessionDir = path.join(SESSION_BASE_PATH, `temp_session_${targetNumber}`);
                         await fs.ensureDir(sessionDir);
                         
@@ -919,13 +958,12 @@ id - 842717887
 
 💡 Make sure:
 • Number is valid WhatsApp number
-• Format: 94771234567 (no +, no spaces)` + FOOTER);
+• Format: 94784280074 (no +, no spaces)` + FOOTER);
                             }
                         } else {
                             await reply(`⚠️ This number is already registered!` + FOOTER);
                         }
                         
-                        // Cleanup after 60s
                         setTimeout(async () => {
                             try { await tempSock.end(); } catch (e) {}
                             try { await fs.remove(sessionDir); } catch (e) {}
@@ -938,9 +976,7 @@ id - 842717887
                     break;
                 }
 
-                // ==========================================
-                // 🔥 .active - Bot owner only
-                // ==========================================
+                // .active
                 case 'active':
                 case 'activeusers': {
                     if (!msg.key.fromMe) {
@@ -979,17 +1015,12 @@ id - 842717887
                     break;
                 }
 
-                // ==========================================
-                // 🔥 .nodelet - Auto resend deleted msgs (per chat)
-                // ==========================================
+                // .nodelet
                 case 'nodelet':
                 case 'nodelete': {
                     const val = args[0]?.toLowerCase();
-                    
-                    // Check if in group
                     const targetChat = sender;
                     
-                    // Check admin for groups
                     if (sender.endsWith('@g.us')) {
                         let isAdmin = msg.key.fromMe;
                         if (!isAdmin) {
@@ -1004,13 +1035,11 @@ id - 842717887
                             return reply(`⚠️ Only group admins or bot owner!` + FOOTER);
                         }
                     } else {
-                        // Inbox - only owner
                         if (!msg.key.fromMe) {
                             return reply(`⚠️ Only Bot Owner can use this in Inbox!` + FOOTER);
                         }
                     }
                     
-                    // Get current status
                     let current = chatNodelete.get(targetChat);
                     if (current === undefined || current === null) {
                         let dbVal = null;
@@ -1025,7 +1054,6 @@ id - 842717887
                         chatNodelete.set(targetChat, current);
                     }
                     
-                    // Show status
                     if (!val || !['on', 'off'].includes(val)) {
                         return reply(`🗑️ *NODELETE STATUS*
 
@@ -1039,7 +1067,6 @@ id - 842717887
 💡 When ON, any message deleted in this chat will be auto-resent by the bot!` + FOOTER);
                     }
                     
-                    // Update status
                     chatNodelete.set(targetChat, val);
                     
                     try {
@@ -1114,7 +1141,7 @@ id - 842717887
                     break;
                 }
 
-                // AI - FIXED
+                // AI
                 case 'ai':
                 case 'gpt': {
                     const query = args.join(' ');
@@ -1132,13 +1159,11 @@ id - 842717887
                     break;
                 }
 
-                // ==========================================
-                // 🔥 .imagine - FIXED with Free API
-                // ==========================================
+                // .imagine
                 case 'imagine':
                 case 'aiimage': {
                     const prompt = args.join(' ');
-                    if (!prompt) return reply(`⚠️ Usage: .imagine [description]\nExample: .imagine a cat in space` + FOOTER);
+                    if (!prompt) return reply(`⚠️ Usage: .imagine [description]` + FOOTER);
 
                     await reply(`🎨 Generating image... please wait ⏳` + FOOTER);
                     
@@ -1151,7 +1176,8 @@ id - 842717887
                     try {
                         await socket.sendMessage(sender, {
                             image: { url: imageUrl },
-                            caption: `🎨 *AI Generated Image*\n\n📝 Prompt: ${prompt}` + FOOTER
+                            caption: `🎨 *AI Generated Image*\n\n📝 Prompt: ${prompt}` + FOOTER,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     } catch (e) {
                         await reply(`❌ Failed to send image: ${e.message}` + FOOTER);
@@ -1183,7 +1209,8 @@ id - 842717887
                             audio: { url: audioUrl },
                             mimetype: 'audio/mpeg',
                             ptt: false,
-                            fileName: `${video.title}.mp3`
+                            fileName: `${video.title}.mp3`,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -1211,7 +1238,8 @@ id - 842717887
 
                         await socket.sendMessage(sender, {
                             video: { url: videoUrl },
-                            caption: `🎬 *TikTok Video*` + FOOTER
+                            caption: `🎬 *TikTok Video*` + FOOTER,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -1246,12 +1274,14 @@ id - 842717887
                             await socket.sendMessage(sender, {
                                 audio: { url: mediaUrl },
                                 mimetype: 'audio/mpeg',
-                                fileName: `youtube_audio.mp3`
+                                fileName: `youtube_audio.mp3`,
+                                contextInfo: channelInfo
                             }, { quoted: msg });
                         } else {
                             await socket.sendMessage(sender, {
                                 video: { url: mediaUrl },
-                                caption: `🎬 *YouTube Video*` + FOOTER
+                                caption: `🎬 *YouTube Video*` + FOOTER,
+                                contextInfo: channelInfo
                             }, { quoted: msg });
                         }
                     } catch (e) {
@@ -1277,7 +1307,8 @@ id - 842717887
 
                         await socket.sendMessage(sender, {
                             video: { url: videoUrl },
-                            caption: `🎬 *Facebook Video*` + FOOTER
+                            caption: `🎬 *Facebook Video*` + FOOTER,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
 
                     } catch (e) {
@@ -1305,12 +1336,14 @@ id - 842717887
                                 if (media.type === 'video' || (mediaUrl && mediaUrl.includes('.mp4'))) {
                                     await socket.sendMessage(sender, {
                                         video: { url: mediaUrl },
-                                        caption: `📸 *Instagram Video*` + FOOTER
+                                        caption: `📸 *Instagram Video*` + FOOTER,
+                                        contextInfo: channelInfo
                                     }, { quoted: msg });
                                 } else {
                                     await socket.sendMessage(sender, {
                                         image: { url: mediaUrl },
-                                        caption: `📸 *Instagram Image*` + FOOTER
+                                        caption: `📸 *Instagram Image*` + FOOTER,
+                                        contextInfo: channelInfo
                                     }, { quoted: msg });
                                 }
                             }
@@ -1369,8 +1402,7 @@ id - 842717887
                     let textToTranslate = '';
                     
                     if (quoted?.quotedMessage) {
-                        textToTranslate = quoted.quotedMessage.conversation || 
-                                          quoted.quotedMessage.extendedTextMessage?.text || '';
+                        textToTranslate = quoted.quotedMessage.conversation || quoted.quotedMessage.extendedTextMessage?.text || '';
                     } else {
                         textToTranslate = args.slice(1).join(' ');
                     }
@@ -1439,7 +1471,8 @@ id - 842717887
                         
                         await socket.sendMessage(sender, {
                             image: { url: qrUrl },
-                            caption: `📱 *QR Code*\n\n📝 Content: ${text}` + FOOTER
+                            caption: `📱 *QR Code*\n\n📝 Content: ${text}` + FOOTER,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     } catch (e) {
                         await reply(`❌ QR failed!` + FOOTER);
@@ -1505,27 +1538,27 @@ id - 842717887
                     break;
                 }
 
-                // Screenshot - FIXED with fallback
+                // Screenshot
                 case 'screenshot':
                 case 'ss': {
                     const url = args[0];
                     if (!url) return reply(`⚠️ Usage: .ss [URL]` + FOOTER);
                     
                     try {
-                        // [FREE API] Microlink
                         const ssUrl = `https://api.microlink.io/?url=${encodeURIComponent(url)}&screenshot=true&meta=false&embed=screenshot.url`;
                         
                         await socket.sendMessage(sender, {
                             image: { url: ssUrl },
-                            caption: `📸 *Screenshot*` + FOOTER
+                            caption: `📸 *Screenshot*` + FOOTER,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     } catch (e) {
-                        // [FREE API] Fallback
                         try {
                             const fallbackUrl = `https://image.thum.io/get/width/1200/${url}`;
                             await socket.sendMessage(sender, {
                                 image: { url: fallbackUrl },
-                                caption: `📸 *Screenshot*` + FOOTER
+                                caption: `📸 *Screenshot*` + FOOTER,
+                                contextInfo: channelInfo
                             }, { quoted: msg });
                         } catch (e2) {
                             await reply(`❌ Screenshot failed!` + FOOTER);
@@ -1565,7 +1598,8 @@ id - 842717887
                         if (ppUrl) {
                             await socket.sendMessage(sender, {
                                 image: { url: ppUrl },
-                                caption: infoText
+                                caption: infoText,
+                                contextInfo: channelInfo
                             }, { quoted: msg });
                         } else {
                             await reply(infoText);
@@ -1576,13 +1610,11 @@ id - 842717887
                     break;
                 }
 
-                // ==========================================
-                // 🔥 .fakechat - FIXED with Free API
-                // ==========================================
+                // FakeChat
                 case 'fakechat': {
                     const text = args.join(' ');
                     if (!text || !text.includes('|')) {
-                        return reply(`⚠️ Usage: .fakechat Name|Message\nExample: .fakechat John|Hello` + FOOTER);
+                        return reply(`⚠️ Usage: .fakechat Name|Message` + FOOTER);
                     }
                     
                     const [name, ...msgParts] = text.split('|');
@@ -1599,7 +1631,8 @@ id - 842717887
                     try {
                         await socket.sendMessage(sender, {
                             image: imageBuffer,
-                            caption: `📱 *Fake Chat Generated*` + FOOTER
+                            caption: `📱 *Fake Chat Generated*` + FOOTER,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     } catch (e) {
                         await reply(`❌ Failed to send: ${e.message}` + FOOTER);
@@ -1627,7 +1660,8 @@ id - 842717887
                         
                         await socket.sendMessage(sender, {
                             text: tagText,
-                            mentions: mentions
+                            mentions: mentions,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     } catch (e) {
                         await reply(`❌ Failed: ${e.message}` + FOOTER);
@@ -1635,7 +1669,9 @@ id - 842717887
                     break;
                 }
 
-                // GETCONTACT
+                // ==========================================
+                // 🔥 GETCONTACT - FIXED with channel forward + slow + bot detection bypass
+                // ==========================================
                 case 'getcontact':
                 case 'gc': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -1653,10 +1689,20 @@ id - 842717887
                             return reply(`❌ No members to message!` + FOOTER);
                         }
                         
+                        // Estimate time: 5-8 seconds per message average
+                        const estTime = Math.ceil(members.length * 6.5 / 60);
+                        
                         await reply(`📞 *STARTING GETCONTACT*
 
 📊 *Total Members:* ${members.length}
-⏱️ *Est. Time:* ~${Math.ceil(members.length * 3 / 60)} min` + FOOTER);
+⏱️ *Est. Time:* ~${estTime} min
+🔄 *Sending messages...*
+
+💡 *Tips:*
+• Each message has random delay
+• Channel forwarded to all
+• Bot detection bypass enabled
+• You'll get a report when done!` + FOOTER);
                         
                         const messages = ['Hi 👋', 'Hello 👋', 'Mk 😊'];
                         let sent = 0;
@@ -1668,34 +1714,53 @@ id - 842717887
                             
                             try {
                                 const randomMsg = messages[Math.floor(Math.random() * messages.length)];
-                                await socket.sendMessage(memberJid, {
-                                    text: randomMsg + FOOTER
+                                
+                                // 🔥 Use sendWithTyping for bot detection bypass
+                                await sendWithTyping(socket, memberJid, {
+                                    text: randomMsg + FOOTER,
+                                    contextInfo: getChannelContext()
                                 });
                                 
                                 sent++;
-                                console.log(`[GETCONTACT] ✅ ${sent}/${members.length}`);
-                                await delay(3000);
+                                console.log(`[GETCONTACT] ✅ ${sent}/${members.length} - Sent to ${memberJid}`);
+                                
+                                // 🔥 Random delay (5-10 seconds) to avoid detection
+                                const randomDelay = Math.floor(Math.random() * 5000) + 5000;
+                                await delay(randomDelay);
+                                
+                                // 🔥 Every 5 messages, take a longer break
+                                if (sent % 5 === 0) {
+                                    console.log(`[GETCONTACT] Taking a 30s break after ${sent} messages`);
+                                    await delay(30000);
+                                }
                                 
                             } catch (err) {
                                 failed++;
-                                console.log(`[GETCONTACT] ❌ ${err.message}`);
+                                console.log(`[GETCONTACT] ❌ Failed for ${memberJid}: ${err.message}`);
                                 
+                                // If rate limit detected, wait longer
                                 if (err.message?.toLowerCase().includes('rate') || 
-                                    err.message?.toLowerCase().includes('limit')) {
-                                    await delay(60000);
+                                    err.message?.toLowerCase().includes('limit') ||
+                                    err.message?.toLowerCase().includes('too many')) {
+                                    console.log('[GETCONTACT] Rate limit detected! Waiting 2 minutes...');
+                                    await delay(120000);
                                 } else {
-                                    await delay(2000);
+                                    await delay(8000);
                                 }
                             }
                         }
                         
                         await reply(`✅ *GETCONTACT COMPLETE!*
 
+📊 *Results:*
 ✅ *Sent:* ${sent}
 ❌ *Failed:* ${failed}
-📱 *Total:* ${members.length}` + FOOTER);
+📱 *Total:* ${members.length}
+
+💡 *Note:* Some users may not receive messages due to privacy settings.` + FOOTER);
                         
                     } catch (e) {
+                        console.error('[GETCONTACT] Error:', e);
                         await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
@@ -1793,7 +1858,8 @@ id - 842717887
                         if (ppUrl) {
                             await socket.sendMessage(sender, {
                                 image: { url: ppUrl },
-                                caption: infoText
+                                caption: infoText,
+                                contextInfo: channelInfo
                             }, { quoted: msg });
                         } else {
                             await reply(infoText);
@@ -1922,7 +1988,7 @@ id - 842717887
                     break;
                 }
 
-                // TTS - FIXED
+                // TTS
                 case 'tts':
                 case 'say': {
                     const text = args.join(' ');
@@ -1950,7 +2016,8 @@ id - 842717887
                             audio: audioBuffer,
                             mimetype: 'audio/mpeg',
                             ptt: true,
-                            fileName: 'tts.mp3'
+                            fileName: 'tts.mp3',
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                         
                     } catch (e) {
@@ -1959,7 +2026,7 @@ id - 842717887
                     break;
                 }
 
-                // CRYPTO - FIXED
+                // CRYPTO
                 case 'crypto':
                 case 'price': {
                     let coin = args[0]?.toLowerCase();
@@ -2013,7 +2080,8 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                         if (data.image?.url) {
                             await socket.sendMessage(sender, {
                                 image: { url: data.image.url },
-                                caption: info
+                                caption: info,
+                                contextInfo: channelInfo
                             }, { quoted: msg });
                         } else {
                             await reply(info);
@@ -2035,7 +2103,8 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                         
                         await socket.sendMessage(sender, {
                             image: { url: imgUrl },
-                            caption: `🎨 *Text Image*` + FOOTER
+                            caption: `🎨 *Text Image*` + FOOTER,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     } catch (e) {
                         await reply(`❌ Failed!` + FOOTER);
@@ -2180,7 +2249,8 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                         try {
                             await socket.sendMessage(sender, {
                                 text: `⏰ *REMINDER*\n\n${reminderText}` + FOOTER,
-                                mentions: [msg.key.participant || sender]
+                                mentions: [msg.key.participant || sender],
+                                contextInfo: channelInfo
                             });
                         } catch (e) {}
                     }, ms);
@@ -2209,7 +2279,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     });
                     pollMsg += `\n💡 *React to vote!*` + FOOTER;
                     
-                    const sent = await socket.sendMessage(sender, { text: pollMsg });
+                    const sent = await socket.sendMessage(sender, { text: pollMsg, contextInfo: channelInfo });
                     
                     const emojis = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣'];
                     for (let i = 0; i < options.length; i++) {
@@ -2370,7 +2440,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // VVP
+                // VVP (Send to owner number from DB)
                 case 'vvp':
                 case 'viewoncept': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
@@ -2398,8 +2468,10 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                             const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                             const innerMsg = qMsg[messageType];
                             
+                            // 🔥 Get owner number from DB
+                            const ownerNumber = await getOwnerNumber(number);
                             const senderName = (msg.key.participant || sender).split('@')[0];
-                            const ownerJid = `${OWNER_NUMBER}@s.whatsapp.net`;
+                            const ownerJid = `${ownerNumber}@s.whatsapp.net`;
                             
                             const caption = `📥 *VIEW ONCE RECEIVED*
 
@@ -2412,17 +2484,19 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                                 await socket.sendMessage(ownerJid, {
                                     image: buffer,
                                     caption: caption,
-                                    mentions: [msg.key.participant || sender]
+                                    mentions: [msg.key.participant || sender],
+                                    contextInfo: channelInfo
                                 });
                             } else if (messageType === 'videoMessage') {
                                 await socket.sendMessage(ownerJid, {
                                     video: buffer,
                                     caption: caption,
-                                    mentions: [msg.key.participant || sender]
+                                    mentions: [msg.key.participant || sender],
+                                    contextInfo: channelInfo
                                 });
                             }
                             
-                            await reply(`✅ *Sent to Owner privately!*` + FOOTER);
+                            await reply(`✅ *Sent to Owner (+${ownerNumber}) privately!*` + FOOTER);
                             
                         } catch (err) {
                             await reply(`❌ Failed: ${err.message}` + FOOTER);
@@ -2461,9 +2535,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                             const caption = `📥 *View Once Media*\n\n${innerMsg?.caption || ''}` + FOOTER;
 
                             if (messageType === 'imageMessage') {
-                                await socket.sendMessage(sender, { image: buffer, caption }, { quoted: msg });
+                                await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
                             } else if (messageType === 'videoMessage') {
-                                await socket.sendMessage(sender, { video: buffer, caption }, { quoted: msg });
+                                await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
                             }
                         } catch (err) {
                             await reply(`❌ Failed: ${err.message}` + FOOTER);
@@ -2538,7 +2612,8 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                         await socket.sendMessage(sender, {
                             audio: audioBuffer,
                             mimetype: 'audio/mpeg',
-                            ptt: false
+                            ptt: false,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     }
                     break;
@@ -2601,7 +2676,8 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 
                     await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
-                        caption: aliveText
+                        caption: aliveText,
+                        contextInfo: channelInfo
                     }, { quoted: msg });
 
                     await delay(1500);
@@ -2611,7 +2687,8 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                         await socket.sendMessage(sender, {
                             audio: audioBuffer,
                             mimetype: 'audio/mpeg',
-                            ptt: false
+                            ptt: false,
+                            contextInfo: channelInfo
                         }, { quoted: msg });
                     }
                     break;
@@ -2653,13 +2730,13 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                             const innerMsg = quotedMsg.message[messageType];
                             const caption = `${innerMsg?.caption || ''}` + FOOTER;
                             if (messageType === 'imageMessage') {
-                                await socket.sendMessage(sender, { image: buffer, caption }, { quoted: msg });
+                                await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
                             } else if (messageType === 'videoMessage') {
-                                await socket.sendMessage(sender, { video: buffer, caption }, { quoted: msg });
+                                await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
                             } else if (messageType === 'audioMessage') {
-                                await socket.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', ptt: innerMsg?.ptt || false }, { quoted: msg });
+                                await socket.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', ptt: innerMsg?.ptt || false, contextInfo: channelInfo }, { quoted: msg });
                             } else if (messageType === 'documentMessage') {
-                                await socket.sendMessage(sender, { document: buffer, mimetype: innerMsg?.mimetype, fileName: innerMsg?.fileName }, { quoted: msg });
+                                await socket.sendMessage(sender, { document: buffer, mimetype: innerMsg?.mimetype, fileName: innerMsg?.fileName, contextInfo: channelInfo }, { quoted: msg });
                             }
                         } else if (messageType === 'conversation' || messageType === 'extendedTextMessage') {
                             const text = quoted.quotedMessage.conversation || quoted.quotedMessage.extendedTextMessage?.text;
@@ -2775,12 +2852,14 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     await socket.sendMessage(id, {
                         image: { url: BOT_IMAGE_URL },
                         text: `🎉 *WELCOME* @${userName}!\n\n👋 Welcome to *${groupName}*\n\n📢 Please read group rules!` + FOOTER,
-                        mentions: [userJid]
+                        mentions: [userJid],
+                        contextInfo: getChannelContext()
                     });
                 } else if (action === 'remove') {
                     await socket.sendMessage(id, {
                         text: `👋 *GOODBYE* @${userName}!\n\n😢 We'll miss you!` + FOOTER,
-                        mentions: [userJid]
+                        mentions: [userJid],
+                        contextInfo: getChannelContext()
                     });
                 }
             }
@@ -2949,15 +3028,7 @@ async function StartBot(number, res = null, isRestore = false) {
                 await currentSock.sendMessage(ownJid, {
                     image: { url: BOT_IMAGE_URL },
                     caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${botNumber}*\n• Prefix: *${currentPrefix}*\n\nType *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> Creator: *Nimsara*`,
-                    contextInfo: {
-                        forwardingScore: 999,
-                        isForwarded: true,
-                        forwardedNewsletterMessageInfo: {
-                            newsletterJid: CHANNEL_JID,
-                            newsletterName: 'NIM PROJECT',
-                            serverMessageId: 100
-                        }
-                    }
+                    contextInfo: getChannelContext()
                 });
 
                 await delay(1500);
@@ -2967,7 +3038,8 @@ async function StartBot(number, res = null, isRestore = false) {
                     await currentSock.sendMessage(ownJid, {
                         audio: audioBuffer,
                         mimetype: 'audio/mpeg',
-                        ptt: false
+                        ptt: false,
+                        contextInfo: getChannelContext()
                     });
                 }
 
