@@ -2,7 +2,7 @@
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
  * Mode: Full Features Enabled
- * Fixed: Sticker Phone, Owner CMD, Working APIs, AutoSave
+ * Fixed: Menu conflict, Sticker error, Download fail, Nimsara simplified
  */
 const {
     default: makeWASocket,
@@ -30,8 +30,9 @@ const FormData = require('form-data');
 let sharp;
 try {
     sharp = require('sharp');
+    console.log('✅ Sharp loaded');
 } catch (e) {
-    console.log('⚠️ sharp not installed');
+    console.log('⚠️ sharp not installed - run: npm install sharp');
 }
 
 const Session = require('./Id');
@@ -48,8 +49,8 @@ const DEFAULT_OWNER_NUMBER = '94784280074';
 const NIM_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
 const NIM_API_BASE = 'https://api.zanta-mini.store';
 
-// 🔒 Owner Numbers (Only these can use .Nimsara)
-const OWNER_NUMBERS = ['94784280074', '94740532742', '94701726411'];
+// 🔒 Owner Numbers
+const OWNER_NUMBERS = ['94784280074', '94701726411'];
 
 const FOOTER = '\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻';
 
@@ -62,18 +63,16 @@ const menuMessageIds = new Map();
 const groupAntiLink = new Map();
 const groupWelcome = new Map();
 const chatNodelete = new Map();
-const getContactLocks = new Map();
 const pendingMediaRequests = new Map();
 
 // ==========================================
-// 🔒 Owner Check (Only 3 numbers)
+// 🔒 Owner Check
 // ==========================================
 function isOwnerNumber(senderJid) {
     if (!senderJid) return false;
     const cleanNum = senderJid.replace(/[^0-9]/g, '').split('@')[0];
-    // Also normalize to last 11-12 digits for safety
     return OWNER_NUMBERS.some(ownerNum => {
-        return cleanNum === ownerNum || cleanNum.endsWith(ownerNum) || ownerNum.endsWith(cleanNum);
+        return cleanNum === ownerNum || cleanNum.endsWith(ownerNum);
     });
 }
 
@@ -167,87 +166,104 @@ async function sendWithTyping(sock, jid, message, options = {}) {
 }
 
 // ==========================================
-// 🔧 STICKER CONVERSION - FIXED FOR PHONE
+// 🔧 FIXED: STICKER CONVERSION
 // ==========================================
-// KEY FIX: WhatsApp phone needs proper WebP with correct metadata
-// Problem: Sharp eken generate karana WebP eka phone ekata readable wenne na
-// Solution: Explicit format + metadata strip + proper channels
 async function convertToSticker(buffer, isVideo = false) {
+    // If sharp is not available, return original buffer
     if (!sharp) {
-        console.log('❌ Sharp not available');
-        return null;
+        console.log('⚠️ Sharp not available, using raw buffer');
+        return buffer;
     }
 
     try {
+        console.log(`[STICKER] Converting ${isVideo ? 'video' : 'image'} - input size: ${buffer.length} bytes`);
+
         if (isVideo) {
-            // ===== VIDEO → ANIMATED WEBP STICKER =====
-            const metadata = await sharp(buffer, { animated: true }).metadata();
-            const totalFrames = metadata.pages || 1;
-            
-            // WhatsApp sticker limits: max 1MB, 512x512, max 5 sec
-            const maxFrames = Math.min(totalFrames, 60);
+            // ===== VIDEO → ANIMATED WEBP =====
+            try {
+                const metadata = await sharp(buffer, { animated: true }).metadata();
+                const totalFrames = metadata.pages || 1;
+                console.log(`[STICKER] Video frames: ${totalFrames}`);
+                
+                const maxFrames = Math.min(totalFrames, 50);
 
-            let result = await sharp(buffer, {
-                animated: true,
-                limitInputPixels: false,
-                pages: maxFrames
-            })
-            .resize(512, 512, {
-                fit: 'contain',
-                background: { r: 0, g: 0, b: 0, alpha: 0 }
-            })
-            // Flatten to ensure alpha channel
-            .webp({
-                quality: 55,
-                effort: 4,
-                loop: 0,
-                delay: 80,
-                lossless: false
-            })
-            .toBuffer();
-
-            // Size check - reduce if too big
-            if (result.length > 900 * 1024) {
-                console.log('⚠️ Sticker too large, reducing...');
-                result = await sharp(buffer, {
+                let result = await sharp(buffer, {
                     animated: true,
                     limitInputPixels: false,
-                    pages: Math.min(totalFrames, 30)
+                    pages: maxFrames
                 })
-                .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .webp({ quality: 35, effort: 4, delay: 100, loop: 0 })
-                .toBuffer();
-            }
-
-            return result;
-
-        } else {
-            // ===== IMAGE → STATIC WEBP STICKER =====
-            // CRITICAL FIX: Ensure proper format with explicit RGBA
-            const result = await sharp(buffer, { limitInputPixels: false })
                 .resize(512, 512, {
                     fit: 'contain',
-                    background: { r: 0, g: 0, b: 0, alpha: 0 },
-                    withoutEnlargement: false
+                    background: { r: 0, g: 0, b: 0, alpha: 0 }
                 })
-                .ensureAlpha() // Force RGBA channel
                 .webp({
-                    quality: 90,
+                    quality: 50,
                     effort: 4,
+                    loop: 0,
+                    delay: 80,
                     lossless: false
                 })
                 .toBuffer();
 
-            return result;
+                // Size check
+                if (result.length > 900 * 1024) {
+                    console.log('[STICKER] Too large, reducing quality...');
+                    result = await sharp(buffer, {
+                        animated: true,
+                        limitInputPixels: false,
+                        pages: Math.min(totalFrames, 25)
+                    })
+                    .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                    .webp({ quality: 30, effort: 4, delay: 100, loop: 0 })
+                    .toBuffer();
+                }
+
+                console.log(`[STICKER] ✅ Animated output: ${result.length} bytes`);
+                return result;
+            } catch (videoErr) {
+                console.log('[STICKER] Video conversion failed, trying first frame:', videoErr.message);
+                // Fallback: extract first frame
+                try {
+                    return await sharp(buffer, { pages: 1 })
+                        .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                        .webp({ quality: 85 })
+                        .toBuffer();
+                } catch (e) {
+                    return buffer;
+                }
+            }
+        } else {
+            // ===== IMAGE → STATIC WEBP =====
+            try {
+                const result = await sharp(buffer, { limitInputPixels: false })
+                    .rotate() // Auto-rotate based on EXIF
+                    .resize(512, 512, {
+                        fit: 'contain',
+                        background: { r: 0, g: 0, b: 0, alpha: 0 },
+                        withoutEnlargement: false
+                    })
+                    .webp({
+                        quality: 90,
+                        effort: 4,
+                        lossless: false
+                    })
+                    .toBuffer();
+
+                console.log(`[STICKER] ✅ Image output: ${result.length} bytes`);
+                return result;
+            } catch (imgErr) {
+                console.log('[STICKER] Image conversion failed:', imgErr.message);
+                return buffer;
+            }
         }
     } catch (e) {
-        console.error('Sticker conversion error:', e.message);
-        return null;
+        console.error('[STICKER] Conversion error:', e.message);
+        return buffer; // Fallback: return original
     }
 }
 
 // ==========================================
-// 🔧 TTS Conversion (Already Working)
+// 🔧 TTS Conversion
 // ==========================================
 async function convertTtsToOpus(mp3Buffer) {
     try {
@@ -276,229 +292,324 @@ async function convertTtsToOpus(mp3Buffer) {
 }
 
 // ==========================================
-// 🌐 MEDIA DOWNLOAD - NIM API + Fallbacks
+// 🌐 MEDIA DOWNLOAD - FIXED with Multiple Fallbacks
 // ==========================================
 
-// 🎵 Song/YT Audio
+// 🎵 YouTube Audio
 async function getYoutubeAudio(url) {
-    // Try 1: NIM API
-    try {
-        const apiUrl = `${NIM_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
-        const res = await axios.get(apiUrl, { timeout: 30000 });
-        const dl = res.data?.result?.download_url || res.data?.result?.url || res.data?.data?.url || res.data?.url;
-        if (dl && dl.startsWith('http')) {
-            console.log('[YT-AUDIO] ✅ NIM API');
-            return dl;
+    const apis = [
+        // NIM API
+        {
+            name: 'NIM-API',
+            fn: async () => {
+                const res = await axios.get(`${NIM_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`, { timeout: 30000 });
+                return res.data?.result?.download_url || res.data?.result?.url || res.data?.data?.url || res.data?.url;
+            }
+        },
+        // Siputzx
+        {
+            name: 'Siputzx',
+            fn: async () => {
+                const res = await axios.get(`https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+                return res.data?.data?.dl || res.data?.data?.url || res.data?.url;
+            }
+        },
+        // yt-dlp
+        {
+            name: 'yt-dlp',
+            fn: async () => {
+                const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${url}"`, { timeout: 30000 });
+                return stdout.trim().split('\n')[0];
+            }
+        },
+        // ytdl-core
+        {
+            name: 'ytdl-core',
+            fn: async () => {
+                const ytdl = require('@distube/ytdl-core');
+                const info = await ytdl.getInfo(url);
+                const format = ytdl.chooseFormat(info, { quality: 'highestaudio', filter: 'audioonly' });
+                return format?.url;
+            }
         }
-    } catch (e) { console.log('[YT-AUDIO] NIM failed:', e.message); }
+    ];
 
-    // Try 2: yt-dlp
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${url}"`, { timeout: 30000 });
-        const dl = stdout.trim().split('\n')[0];
-        if (dl && dl.startsWith('http')) {
-            console.log('[YT-AUDIO] ✅ yt-dlp');
-            return dl;
+    for (const api of apis) {
+        try {
+            const dl = await api.fn();
+            if (dl && dl.startsWith('http')) {
+                console.log(`[YT-AUDIO] ✅ ${api.name}`);
+                return dl;
+            }
+        } catch (e) {
+            console.log(`[YT-AUDIO] ❌ ${api.name}: ${e.message}`);
         }
-    } catch (e) {}
-
-    // Try 3: ytdl-core
-    try {
-        const ytdl = require('@distube/ytdl-core');
-        const info = await ytdl.getInfo(url);
-        const format = ytdl.chooseFormat(info, { quality: 'highestaudio', filter: 'audioonly' });
-        if (format?.url) return format.url;
-    } catch (e) {}
-
+    }
     return null;
 }
 
-// 🎬 YT Video with quality
+// 🎬 YouTube Video
 async function getYoutubeVideo(url, quality = '720') {
-    // Try 1: NIM API
-    try {
-        const apiUrl = `${NIM_API_BASE}/api/ytmp4?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}&quality=${quality}`;
-        const res = await axios.get(apiUrl, { timeout: 30000 });
-        const dl = res.data?.result?.download_url || res.data?.result?.url || res.data?.data?.url || res.data?.url;
-        if (dl && dl.startsWith('http')) {
-            console.log('[YT-VIDEO] ✅ NIM API');
-            return dl;
+    const apis = [
+        {
+            name: 'NIM-API',
+            fn: async () => {
+                const res = await axios.get(`${NIM_API_BASE}/api/ytmp4?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}&quality=${quality}`, { timeout: 30000 });
+                return res.data?.result?.download_url || res.data?.result?.url || res.data?.data?.url || res.data?.url;
+            }
+        },
+        {
+            name: 'Siputzx',
+            fn: async () => {
+                const res = await axios.get(`https://api.siputzx.my.id/api/d/ytmp4?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+                return res.data?.data?.dl || res.data?.data?.url || res.data?.url;
+            }
+        },
+        {
+            name: 'yt-dlp',
+            fn: async () => {
+                const fmt = quality === '1080' ? 'best[height<=1080]' : quality === '720' ? 'best[height<=720]' : 'best[height<=480]';
+                const { stdout } = await execPromise(`yt-dlp --get-url -f "${fmt}[ext=mp4]/best[ext=mp4]" "${url}"`, { timeout: 30000 });
+                return stdout.trim().split('\n')[0];
+            }
+        },
+        {
+            name: 'ytdl-core',
+            fn: async () => {
+                const ytdl = require('@distube/ytdl-core');
+                const info = await ytdl.getInfo(url);
+                const format = ytdl.chooseFormat(info, { quality: 'highestvideo', filter: 'videoandaudio' });
+                return format?.url;
+            }
         }
-    } catch (e) { console.log('[YT-VIDEO] NIM failed:', e.message); }
+    ];
 
-    // Try 2: yt-dlp with quality
-    try {
-        const fmt = quality === '1080' ? 'best[height<=1080]' : quality === '720' ? 'best[height<=720]' : 'best[height<=480]';
-        const { stdout } = await execPromise(`yt-dlp --get-url -f "${fmt}[ext=mp4]/best[ext=mp4]" "${url}"`, { timeout: 30000 });
-        const dl = stdout.trim().split('\n')[0];
-        if (dl && dl.startsWith('http')) {
-            console.log('[YT-VIDEO] ✅ yt-dlp');
-            return dl;
+    for (const api of apis) {
+        try {
+            const dl = await api.fn();
+            if (dl && dl.startsWith('http')) {
+                console.log(`[YT-VIDEO] ✅ ${api.name}`);
+                return dl;
+            }
+        } catch (e) {
+            console.log(`[YT-VIDEO] ❌ ${api.name}: ${e.message}`);
         }
-    } catch (e) {}
-
-    // Try 3: ytdl-core
-    try {
-        const ytdl = require('@distube/ytdl-core');
-        const info = await ytdl.getInfo(url);
-        const format = ytdl.chooseFormat(info, { quality: 'highestvideo', filter: 'videoandaudio' });
-        if (format?.url) return format.url;
-    } catch (e) {}
-
+    }
     return null;
 }
 
 // 🎬 TikTok
 async function getTikTok(url, quality = 'hd') {
-    // Try 1: NIM API
-    try {
-        const apiUrl = `${NIM_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
-        const res = await axios.get(apiUrl, { timeout: 30000 });
-        const data = res.data?.result || res.data?.data || res.data;
-        const dl = quality === 'hd'
-            ? (data?.hd || data?.video_hd || data?.video || data?.url || data?.download_url || data?.play)
-            : (data?.sd || data?.video_sd || data?.video || data?.url || data?.download_url || data?.play);
-        if (dl && typeof dl === 'string' && dl.startsWith('http')) {
-            console.log('[TIKTOK] ✅ NIM API');
-            return dl;
+    const apis = [
+        {
+            name: 'NIM-API',
+            fn: async () => {
+                const res = await axios.get(`${NIM_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`, { timeout: 30000 });
+                const data = res.data?.result || res.data?.data || res.data;
+                return quality === 'hd' ? (data?.hd || data?.video_hd || data?.video || data?.url) : (data?.sd || data?.video_sd || data?.video || data?.url);
+            }
+        },
+        {
+            name: 'tikwm',
+            fn: async () => {
+                const res = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, { timeout: 25000 });
+                const dl = quality === 'hd' ? (res.data?.data?.hdplay || res.data?.data?.play) : res.data?.data?.play;
+                if (dl) return dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`;
+            }
+        },
+        {
+            name: 'Siputzx',
+            fn: async () => {
+                const res = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+                return res.data?.data?.video || res.data?.video || res.data?.url;
+            }
+        },
+        {
+            name: 'yt-dlp',
+            fn: async () => {
+                const { stdout } = await execPromise(`yt-dlp --get-url "${url}"`, { timeout: 30000 });
+                return stdout.trim().split('\n')[0];
+            }
         }
-    } catch (e) { console.log('[TIKTOK] NIM failed:', e.message); }
+    ];
 
-    // Try 2: tikwm
-    try {
-        const res = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, { timeout: 25000 });
-        const dl = quality === 'hd' ? (res.data?.data?.hdplay || res.data?.data?.play) : res.data?.data?.play;
-        if (dl) {
-            return dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`;
+    for (const api of apis) {
+        try {
+            const dl = await api.fn();
+            if (dl && dl.startsWith('http')) {
+                console.log(`[TIKTOK] ✅ ${api.name}`);
+                return dl;
+            }
+        } catch (e) {
+            console.log(`[TIKTOK] ❌ ${api.name}: ${e.message}`);
         }
-    } catch (e) {}
-
-    // Try 3: yt-dlp
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url "${url}"`, { timeout: 30000 });
-        const dl = stdout.trim().split('\n')[0];
-        if (dl && dl.startsWith('http')) return dl;
-    } catch (e) {}
-
+    }
     return null;
 }
 
 // 📘 Facebook
 async function getFacebook(url) {
-    // Try 1: NIM API
-    try {
-        const apiUrl = `${NIM_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
-        const res = await axios.get(apiUrl, { timeout: 30000 });
-        const dl = res.data?.result?.hd || res.data?.result?.sd || res.data?.result?.url || res.data?.data?.url || res.data?.url;
-        if (dl && dl.startsWith('http')) {
-            console.log('[FB] ✅ NIM API');
-            return dl;
+    const apis = [
+        {
+            name: 'NIM-API',
+            fn: async () => {
+                const res = await axios.get(`${NIM_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`, { timeout: 30000 });
+                return res.data?.result?.hd || res.data?.result?.sd || res.data?.result?.url || res.data?.data?.url || res.data?.url;
+            }
+        },
+        {
+            name: 'Siputzx',
+            fn: async () => {
+                const res = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+                return res.data?.data?.hd || res.data?.data?.sd || res.data?.url;
+            }
+        },
+        {
+            name: 'yt-dlp',
+            fn: async () => {
+                const { stdout } = await execPromise(`yt-dlp --get-url "${url}"`, { timeout: 30000 });
+                return stdout.trim().split('\n')[0];
+            }
         }
-    } catch (e) { console.log('[FB] NIM failed:', e.message); }
+    ];
 
-    // Try 2: yt-dlp
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url "${url}"`, { timeout: 30000 });
-        const dl = stdout.trim().split('\n')[0];
-        if (dl && dl.startsWith('http')) return dl;
-    } catch (e) {}
-
-    // Try 3: siputzx
-    try {
-        const res = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(url)}`, { timeout: 25000 });
-        const dl = res.data?.data?.hd || res.data?.data?.sd || res.data?.url;
-        if (dl) return dl;
-    } catch (e) {}
-
+    for (const api of apis) {
+        try {
+            const dl = await api.fn();
+            if (dl && dl.startsWith('http')) {
+                console.log(`[FB] ✅ ${api.name}`);
+                return dl;
+            }
+        } catch (e) {
+            console.log(`[FB] ❌ ${api.name}: ${e.message}`);
+        }
+    }
     return null;
 }
 
 // 📸 Instagram
 async function getInstagram(url) {
-    // Try 1: NIM API
-    try {
-        const apiUrl = `${NIM_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
-        const res = await axios.get(apiUrl, { timeout: 30000 });
-        const data = res.data?.result || res.data?.data;
-        if (Array.isArray(data) && data.length > 0) {
-            console.log('[IG] ✅ NIM API (array)');
-            return data.map(m => ({
-                url: m.url || m.download_url || m.link || m.src,
-                type: (m.type || '').toLowerCase().includes('video') || (m.url || '').includes('.mp4') ? 'video' : 'image'
-            }));
+    const apis = [
+        {
+            name: 'NIM-API',
+            fn: async () => {
+                const res = await axios.get(`${NIM_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`, { timeout: 30000 });
+                const data = res.data?.result || res.data?.data;
+                if (Array.isArray(data) && data.length > 0) {
+                    return data.map(m => ({
+                        url: m.url || m.download_url || m.link || m.src,
+                        type: (m.type || '').toLowerCase().includes('video') || (m.url || '').includes('.mp4') ? 'video' : 'image'
+                    }));
+                }
+                if (data?.url) {
+                    return [{ url: data.url, type: (data.type || '').includes('video') ? 'video' : 'image' }];
+                }
+            }
+        },
+        {
+            name: 'Siputzx',
+            fn: async () => {
+                const res = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+                if (res.data?.data && Array.isArray(res.data.data)) {
+                    return res.data.data.map(m => ({
+                        url: m.url,
+                        type: (m.type || '').includes('video') ? 'video' : 'image'
+                    }));
+                }
+            }
+        },
+        {
+            name: 'Snapinsta',
+            fn: async () => {
+                const res = await axios.get(`https://api.snapinsta.app/api/instagram?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+                const data = res.data?.data || res.data?.result;
+                if (Array.isArray(data)) {
+                    return data.map(m => ({
+                        url: m.url || m.download_url,
+                        type: (m.type || '').includes('video') ? 'video' : 'image'
+                    }));
+                }
+            }
         }
-        if (data?.url) {
-            return [{ url: data.url, type: (data.type || '').includes('video') ? 'video' : 'image' }];
-        }
-    } catch (e) { console.log('[IG] NIM failed:', e.message); }
+    ];
 
-    // Try 2: siputzx
-    try {
-        const res = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(url)}`, { timeout: 25000 });
-        if (res.data?.data && Array.isArray(res.data.data)) {
-            return res.data.data.map(m => ({
-                url: m.url,
-                type: (m.type || '').includes('video') ? 'video' : 'image'
-            }));
+    for (const api of apis) {
+        try {
+            const dl = await api.fn();
+            if (dl && Array.isArray(dl) && dl.length > 0) {
+                console.log(`[IG] ✅ ${api.name}`);
+                return dl;
+            }
+        } catch (e) {
+            console.log(`[IG] ❌ ${api.name}: ${e.message}`);
         }
-    } catch (e) {}
-
+    }
     return null;
 }
 
 // 🎬 Movie
 async function getMovie(query) {
-    // Try 1: NIM API
-    try {
-        const apiUrl = `${NIM_API_BASE}/api/movie?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
-        const res = await axios.get(apiUrl, { timeout: 40000 });
-        const data = res.data?.result || res.data?.data || res.data;
-        
-        if (data) {
-            if (Array.isArray(data) && data.length > 0) {
-                console.log('[MOVIE] ✅ NIM API (array)');
-                return data.map(m => ({
-                    title: m.title || m.name || 'Unknown',
-                    year: m.year,
-                    quality: m.quality || 'HD',
-                    size: m.size,
-                    url: m.url || m.download_url || m.link,
-                    poster: m.poster || m.image || m.thumbnail,
-                    rating: m.rating
-                })).filter(m => m.url);
+    const apis = [
+        {
+            name: 'NIM-API',
+            fn: async () => {
+                const res = await axios.get(`${NIM_API_BASE}/api/movie?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`, { timeout: 40000 });
+                const data = res.data?.result || res.data?.data || res.data;
+                if (Array.isArray(data) && data.length > 0) {
+                    return data.map(m => ({
+                        title: m.title || m.name || 'Unknown',
+                        year: m.year,
+                        quality: m.quality || 'HD',
+                        size: m.size,
+                        url: m.url || m.download_url || m.link,
+                        poster: m.poster || m.image || m.thumbnail,
+                        rating: m.rating
+                    })).filter(m => m.url);
+                }
+                if (data?.title || data?.name) {
+                    return [{
+                        title: data.title || data.name,
+                        year: data.year,
+                        quality: data.quality || 'HD',
+                        size: data.size,
+                        url: data.url || data.download_url || data.link,
+                        poster: data.poster || data.image,
+                        rating: data.rating
+                    }];
+                }
             }
-            if (data.title || data.name) {
-                return [{
-                    title: data.title || data.name,
-                    year: data.year,
-                    quality: data.quality || 'HD',
-                    size: data.size,
-                    url: data.url || data.download_url || data.link,
-                    poster: data.poster || data.image,
-                    rating: data.rating
-                }];
+        },
+        {
+            name: 'YTS',
+            fn: async () => {
+                const res = await axios.get(`https://yts.mx/api/v2/list_movies.json?query_term=${encodeURIComponent(query)}&limit=5`, { timeout: 20000 });
+                const movies = res.data?.data?.movies;
+                if (movies && movies.length > 0) {
+                    return movies.map(m => ({
+                        title: m.title,
+                        year: m.year,
+                        quality: m.torrents?.[0]?.quality || 'HD',
+                        size: m.torrents?.[0]?.size || 'N/A',
+                        url: m.torrents?.[0]?.url || m.url,
+                        poster: m.medium_cover_image,
+                        rating: m.rating
+                    }));
+                }
             }
         }
-    } catch (e) { console.log('[MOVIE] NIM failed:', e.message); }
+    ];
 
-    // Try 2: YTS
-    try {
-        const res = await axios.get(`https://yts.mx/api/v2/list_movies.json?query_term=${encodeURIComponent(query)}&limit=5`, { timeout: 20000 });
-        const movies = res.data?.data?.movies;
-        if (movies && movies.length > 0) {
-            console.log('[MOVIE] ✅ YTS');
-            return movies.map(m => ({
-                title: m.title,
-                year: m.year,
-                quality: m.torrents?.[0]?.quality || 'HD',
-                size: m.torrents?.[0]?.size || 'N/A',
-                url: m.torrents?.[0]?.url || m.url,
-                poster: m.medium_cover_image,
-                rating: m.rating
-            }));
+    for (const api of apis) {
+        try {
+            const dl = await api.fn();
+            if (dl && dl.length > 0) {
+                console.log(`[MOVIE] ✅ ${api.name}`);
+                return dl;
+            }
+        } catch (e) {
+            console.log(`[MOVIE] ❌ ${api.name}: ${e.message}`);
         }
-    } catch (e) {}
-
+    }
     return null;
 }
 
@@ -613,9 +724,19 @@ async function handlePendingMedia(socket, sender, msg, reply, pending, choice, c
         await reply(`📥 Downloading (option ${choice})... ⏳` + FOOTER);
 
         if (choice === '1') {
-            // MP3
             const audioUrl = await getYoutubeAudio(url);
-            if (!audioUrl) return reply(`❌ Audio download failed!` + FOOTER);
+            if (!audioUrl) {
+                // Fallback: try video
+                const videoUrl = await getYoutubeVideo(url, '360');
+                if (!videoUrl) return reply(`❌ Audio download failed!\n\n💡 Try again or use different URL` + FOOTER);
+                
+                await socket.sendMessage(sender, {
+                    video: { url: videoUrl },
+                    caption: `🎬 *${title}*\n📺 360p (audio failed, video sent)` + FOOTER,
+                    contextInfo: channelInfo
+                }, { quoted: msg });
+                return;
+            }
 
             try {
                 await socket.sendMessage(sender, {
@@ -629,7 +750,6 @@ async function handlePendingMedia(socket, sender, msg, reply, pending, choice, c
                 await reply(`❌ Send failed: ${e.message}` + FOOTER);
             }
         } else {
-            // Video quality
             const quality = choice === '2' ? '360' : choice === '3' ? '720' : '1080';
             const videoUrl = await getYoutubeVideo(url, quality);
             if (!videoUrl) return reply(`❌ Video download failed!` + FOOTER);
@@ -648,26 +768,18 @@ async function handlePendingMedia(socket, sender, msg, reply, pending, choice, c
     else if (P === 'tiktok') {
         await reply(`📥 Downloading (option ${choice})... ⏳` + FOOTER);
 
-        if (choice === '3') {
-            // Audio only
-            const videoUrl = await getTikTok(pending.url, 'hd');
-            if (!videoUrl) return reply(`❌ Download failed!` + FOOTER);
-            
-            await socket.sendMessage(sender, {
-                video: { url: videoUrl },
-                caption: `🎬 *TikTok*\n⚠️ Video only (audio extract not supported)` + FOOTER,
-                contextInfo: channelInfo
-            }, { quoted: msg });
-        } else {
-            const quality = choice === '1' ? 'hd' : 'sd';
-            const videoUrl = await getTikTok(pending.url, quality);
-            if (!videoUrl) return reply(`❌ Download failed!` + FOOTER);
+        const quality = choice === '1' ? 'hd' : 'sd';
+        const videoUrl = await getTikTok(pending.url, quality);
+        if (!videoUrl) return reply(`❌ Download failed!` + FOOTER);
 
+        try {
             await socket.sendMessage(sender, {
                 video: { url: videoUrl },
                 caption: `🎬 *TikTok ${quality.toUpperCase()}*` + FOOTER,
                 contextInfo: channelInfo
             }, { quoted: msg });
+        } catch (e) {
+            await reply(`❌ Send failed: ${e.message}` + FOOTER);
         }
     }
     else if (P === 'movie') {
@@ -677,10 +789,9 @@ async function handlePendingMedia(socket, sender, msg, reply, pending, choice, c
 
         await reply(`📥 Downloading: *${movie.title}*... ⏳` + FOOTER);
 
-        if (!movie.url) return reply(`❌ No download link for this movie!` + FOOTER);
+        if (!movie.url) return reply(`❌ No download link!` + FOOTER);
 
         try {
-            // Send as document (movie files are large)
             await socket.sendMessage(sender, {
                 document: { url: movie.url },
                 mimetype: 'video/mp4',
@@ -821,23 +932,43 @@ function setupCommandHandlers(socket, number) {
         };
 
         // ==========================================
-        // AUTO-SAVE
+        // 🚀 CRITICAL: PENDING MEDIA CHECK MUST BE FIRST!
         // ==========================================
+        // This runs BEFORE menu check to prevent conflicts
+        if (!isCommand && pendingMediaRequests.has(sender)) {
+            const pending = pendingMediaRequests.get(sender);
+            const numReply = body.trim();
+            
+            if (['1', '2', '3', '4', '5'].includes(numReply)) {
+                // Check expiry
+                if (Date.now() - pending.timestamp > 5 * 60 * 1000) {
+                    pendingMediaRequests.delete(sender);
+                    // Fall through to menu check
+                } else {
+                    try {
+                        pendingMediaRequests.delete(sender);
+                        await handlePendingMedia(socket, sender, msg, reply, pending, numReply, channelInfo);
+                        return; // STOP - don't process as menu
+                    } catch (e) {
+                        console.error('Pending media error:', e);
+                        pendingMediaRequests.delete(sender);
+                        await reply(`❌ ${e.message}` + FOOTER);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // AUTO-SAVE
         if (!msg.key.fromMe && !sender.endsWith('@g.us') && !sender.endsWith('@broadcast') && !sender.endsWith('@newsletter')) {
             try {
                 const autoSaveStatus = await get('AUTOSAVE_STATUS', number);
                 if (autoSaveStatus === 'on' || autoSaveStatus === 'true') {
                     const autoSaveName = await get('AUTOSAVE_NAME', number) || 'Saved Contact';
-                    
                     try {
-                        // addOrEditContact saves contact in WhatsApp phonebook
-                        await socket.addOrEditContact(sender, {
-                            firstName: autoSaveName
-                        });
-                        console.log(`[AUTOSAVE] ✅ Saved ${sender} as "${autoSaveName}"`);
-                    } catch (saveErr) {
-                        // Contact may already exist, which is fine
-                    }
+                        await socket.addOrEditContact(sender, { firstName: autoSaveName });
+                        console.log(`[AUTOSAVE] ✅ Saved ${sender}`);
+                    } catch (saveErr) {}
                 }
             } catch (e) {}
         }
@@ -885,31 +1016,7 @@ function setupCommandHandlers(socket, number) {
             } catch (e) {}
         }
 
-        // ==========================================
-        // PENDING MEDIA REPLY (Quality Selection)
-        // ==========================================
-        if (!isCommand && pendingMediaRequests.has(sender)) {
-            const pending = pendingMediaRequests.get(sender);
-            const numReply = body.trim();
-            
-            if (['1', '2', '3', '4', '5'].includes(numReply)) {
-                if (Date.now() - pending.timestamp > 5 * 60 * 1000) {
-                    pendingMediaRequests.delete(sender);
-                } else {
-                    try {
-                        pendingMediaRequests.delete(sender);
-                        await handlePendingMedia(socket, sender, msg, reply, pending, numReply, channelInfo);
-                        return;
-                    } catch (e) {
-                        console.error('Pending media error:', e);
-                        pendingMediaRequests.delete(sender);
-                        await reply(`❌ ${e.message}` + FOOTER);
-                    }
-                }
-            }
-        }
-
-        // Menu Reply Handler
+        // Menu Reply Handler (ONLY if not pending media)
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
         const quotedStanzaId = contextInfo?.stanzaId || '';
         let quotedText = '';
@@ -1050,10 +1157,9 @@ function setupCommandHandlers(socket, number) {
             switch (command) {
 
                 // ==========================================
-                // 🔒 .Nimsara - OWNER-ONLY SETTINGS
+                // 🔒 .Nimsara - SIMPLIFIED (Name + Logo only)
                 // ==========================================
                 case 'nimsara': {
-                    // Check if sender is one of the 3 owner numbers
                     if (!isOwnerNumber(senderJid) && !msg.key.fromMe) {
                         return reply(`⛔ *Access Denied!*\n\n💡 This command is for Owner only!` + FOOTER);
                     }
@@ -1062,25 +1168,19 @@ function setupCommandHandlers(socket, number) {
 
                     if (!subCmd) {
                         const bName = await get('BOT_NAME', number) || 'NIM BOT';
-                        const pfx = await get('PREFIX', number) || '.';
                         const logoUrl = await get('BOT_LOGO_URL', number) || BOT_IMAGE_URL;
-                        const autoSave = await get('AUTOSAVE_STATUS', number) || 'off';
-                        const autoSaveName = await get('AUTOSAVE_NAME', number) || 'Saved Contact';
                         
                         return reply(`🔒 *NIMSARA OWNER PANEL*
 
 📊 *Current Settings:*
-📝 Name: *${bName}*
-🔤 Prefix: *${pfx}*
-💾 AutoSave: *${autoSave}*
-📛 AutoSave Name: *${autoSaveName}*
+📝 Bot Name: *${bName}*
+🖼️ Bot Logo: ${logoUrl}
 
 *Commands:*
 • \`.Nimsara setname [name]\` - Change bot name
 • \`.Nimsara setlogo [url]\` - Change bot logo
-• \`.Nimsara setprefix [prefix]\` - Change prefix
-• \`.Nimsara info\` - Show bot info
-• \`.Nimsara numbers\` - Show owner numbers
+• \`.Nimsara setlogo reply\` - Reply to image
+• \`.Nimsara info\` - Show current settings
 
 💡 *Only 3 Owner Numbers:*
 • 94784280074
@@ -1105,13 +1205,14 @@ function setupCommandHandlers(socket, number) {
                             const quoted = msg.message?.extendedTextMessage?.contextInfo;
                             if (quoted?.quotedMessage?.imageMessage) {
                                 try {
+                                    await reply(`⏳ Uploading logo...` + FOOTER);
+                                    
                                     const downloadMsg = {
                                         key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
                                         message: { imageMessage: quoted.quotedMessage.imageMessage }
                                     };
                                     const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                                     
-                                    // Upload to catbox
                                     const form = new FormData();
                                     form.append('reqtype', 'fileupload');
                                     form.append('fileToUpload', buffer, { filename: 'logo.jpg', contentType: 'image/jpeg' });
@@ -1134,39 +1235,15 @@ function setupCommandHandlers(socket, number) {
                         }
 
                         await handleSettingUpdate("BOT_LOGO_URL", logoUrl, reply, number);
-                        await reply(`✅ *BOT LOGO UPDATED!*\n\n🖼️ URL saved!` + FOOTER);
-                        return;
-                    }
-
-                    if (subCmd === 'setprefix') {
-                        const newPrefix = args[1];
-                        if (!newPrefix) return reply(`⚠️ Usage: .Nimsara setprefix [prefix]` + FOOTER);
-                        await handleSettingUpdate("PREFIX", newPrefix, reply, number);
-                        await reply(`✅ *PREFIX UPDATED!*\n\n🔤 New Prefix: *${newPrefix}*` + FOOTER);
+                        await reply(`✅ *BOT LOGO UPDATED!*\n\n🖼️ Logo saved!` + FOOTER);
                         return;
                     }
 
                     if (subCmd === 'info') {
                         const bName = await get('BOT_NAME', number) || 'NIM BOT';
-                        const pfx = await get('PREFIX', number) || '.';
                         const logoUrl = await get('BOT_LOGO_URL', number) || BOT_IMAGE_URL;
-                        const autoSave = await get('AUTOSAVE_STATUS', number) || 'off';
-                        const autoSaveName = await get('AUTOSAVE_NAME', number) || 'Saved Contact';
 
-                        await reply(`ℹ️ *BOT INFO*
-
-📝 Name: *${bName}*
-🔤 Prefix: *${pfx}*
-🖼️ Logo: ${logoUrl}
-💾 AutoSave: *${autoSave}*
-📛 AutoSave Name: *${autoSaveName}*
-🔢 Bot Number: *${number}*
-👑 Owner Numbers: 3` + FOOTER);
-                        return;
-                    }
-
-                    if (subCmd === 'numbers') {
-                        await reply(`👑 *OWNER NUMBERS (3)*\n\n1️⃣ 94784280074\n2️⃣ 94740532742\n3️⃣ 94701726411\n\n💡 Only these numbers can use \`.Nimsara\` command!` + FOOTER);
+                        await reply(`ℹ️ *BOT INFO*\n\n📝 Name: *${bName}*\n🖼️ Logo: ${logoUrl}\n🔢 Bot Number: *${number}*` + FOOTER);
                         return;
                     }
 
@@ -1229,7 +1306,7 @@ function setupCommandHandlers(socket, number) {
                 }
 
                 // ==========================================
-                // 🎵 SONG / YT
+                // 🎵 SONG
                 // ==========================================
                 case 'song':
                 case 'play': {
@@ -1389,7 +1466,6 @@ function setupCommandHandlers(socket, number) {
 
                         for (const media of mediaData) {
                             if (!media.url) continue;
-
                             try {
                                 if (media.type === 'video' || media.url.includes('.mp4')) {
                                     await socket.sendMessage(sender, {
@@ -1405,9 +1481,7 @@ function setupCommandHandlers(socket, number) {
                                     }, { quoted: msg });
                                 }
                                 await delay(500);
-                            } catch (e) {
-                                console.log('[IG] Send failed:', e.message);
-                            }
+                            } catch (e) {}
                         }
                     } catch (e) {
                         await reply(`❌ Error: ${e.message}` + FOOTER);
@@ -1441,7 +1515,6 @@ function setupCommandHandlers(socket, number) {
                         });
                         movieList += `💡 *Reply with a number to download!*` + FOOTER;
 
-                        // Send with poster if available
                         const firstMovie = movies[0];
                         if (firstMovie?.poster) {
                             await socket.sendMessage(sender, {
@@ -1484,6 +1557,8 @@ function setupCommandHandlers(socket, number) {
                         const { type: messageType, data: mediaData } = mediaInfo;
                         const isVideo = messageType === 'videoMessage';
 
+                        await reply(`⏳ Creating sticker...` + FOOTER);
+
                         const downloadMsg = {
                             key: {
                                 remoteJid: quoted.remoteJid || sender,
@@ -1504,18 +1579,20 @@ function setupCommandHandlers(socket, number) {
                             return reply(`❌ Failed to download media!` + FOOTER);
                         }
 
+                        console.log(`[STICKER] Downloaded: ${buffer.length} bytes`);
+
                         const stickerBuffer = await convertToSticker(buffer, isVideo);
 
                         if (!stickerBuffer || stickerBuffer.length === 0) {
                             return reply(`❌ Sticker conversion failed!` + FOOTER);
                         }
 
-                        // 🔧 FIX: Send as sticker - do NOT set mimetype, baileys handles it
+                        // Send sticker
                         await socket.sendMessage(sender, {
                             sticker: stickerBuffer
                         }, { quoted: msg });
 
-                        console.log(`[STICKER] ✅ ${isVideo ? 'video' : 'image'} - ${stickerBuffer.length} bytes`);
+                        console.log(`[STICKER] ✅ Sent: ${stickerBuffer.length} bytes`);
 
                     } catch (e) {
                         console.error('[STICKER] Error:', e);
@@ -1770,6 +1847,7 @@ function setupCommandHandlers(socket, number) {
 💡 *Reply to this message with a number!*
 
 > 🔗 Web: https://nimsara-official.vercel.app/
+
 > *📢 CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _© ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻_`;
@@ -1814,7 +1892,7 @@ function setupCommandHandlers(socket, number) {
                     break;
                 }
 
-                // Autoread / Autoreply / others
+                // Autoread
                 case 'autoread': {
                     if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
                     const option = args[0]?.toLowerCase();
