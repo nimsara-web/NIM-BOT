@@ -90,11 +90,10 @@ const getContactLocks = new Map();
 
 // ==========================================
 // 🛡️ AUTO-REPLY ANTI-LOOP SYSTEM
-// Tracks recent auto-replies to prevent bot-to-bot loops
 // ==========================================
-const autoReplyTracker = new Map(); // key: `${number}_${sender}` → { count, firstTime }
-const AUTO_REPLY_WINDOW = 60000; // 60 seconds window
-const AUTO_REPLY_MAX_COUNT = 3; // Max 3 auto-replies per minute per sender
+const autoReplyTracker = new Map();
+const AUTO_REPLY_WINDOW = 60000;
+const AUTO_REPLY_MAX_COUNT = 3;
 
 // ==========================================
 // 🔑 STRICT Owner Check
@@ -135,7 +134,6 @@ async function loadOwnerList(botNumber) {
 
 // ==========================================
 // 🛡️ Auto-Reply Loop Detection
-// Returns TRUE if it's safe to auto-reply, FALSE if it's a potential loop
 // ==========================================
 function canAutoReply(botNumber, senderJid) {
     const now = Date.now();
@@ -143,17 +141,14 @@ function canAutoReply(botNumber, senderJid) {
     
     let tracker = autoReplyTracker.get(key);
     
-    // No tracker or window expired → create fresh
     if (!tracker || (now - tracker.firstTime) > AUTO_REPLY_WINDOW) {
         tracker = { count: 1, firstTime: now };
         autoReplyTracker.set(key, tracker);
         return true;
     }
     
-    // Within window → increment count
     tracker.count++;
     
-    // If exceeded max → block and log
     if (tracker.count > AUTO_REPLY_MAX_COUNT) {
         console.log(`[AUTO-REPLY] 🛑 Loop detected! Blocked reply to ${senderJid} (count: ${tracker.count})`);
         return false;
@@ -162,7 +157,6 @@ function canAutoReply(botNumber, senderJid) {
     return true;
 }
 
-// Cleanup old tracker entries every 2 minutes
 setInterval(() => {
     const now = Date.now();
     for (const [key, tracker] of autoReplyTracker) {
@@ -859,7 +853,14 @@ ${messageText}
         const isCommand = body.startsWith(prefix);
 
         // ==========================================
-        // 🔑 STRICT OWNER CHECK
+        // 🔑 STRICT OWNER CHECK - FIXED
+        // isOwnerUser = true ONLY if:
+        //   1. The actual sender number is in OWNER_LIST, OR
+        //   2. The message is from THIS bot session AND this bot's own number is in OWNER_LIST
+        //
+        // ⚠️ IMPORTANT: If someone else connects the bot (not main owner),
+        //    their own number will NOT be in OWNER_LIST, so isOwnerUser = FALSE
+        //    even though msg.key.fromMe = true (they can't use owner commands)
         // ==========================================
         const senderNumber = (msg.key.participant || sender).split('@')[0].split(':')[0];
         const isOwnerUser = isOwnerNumber(senderNumber) || 
@@ -1279,9 +1280,6 @@ ${messageText}
                 const textLower = body.toLowerCase().trim();
                 const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
                 
-                // ==========================================
-                // 🛡️ LOOP PROTECTION #1: Bot response pattern check
-                // ==========================================
                 const botResponsePatterns = [
                     'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
                     'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
@@ -1294,11 +1292,8 @@ ${messageText}
                 
                 if (isFromBot || isBotResponse) return;
 
-                // ==========================================
-                // 🛡️ LOOP PROTECTION #2: Rate limit per sender
-                // ==========================================
                 if (!canAutoReply(number, sender)) {
-                    return; // Blocked due to potential loop
+                    return;
                 }
 
                 global.customReplies = global.customReplies || {};
@@ -1394,6 +1389,8 @@ id - 842717887
         const isGroup = sender.endsWith('@g.us');
         const botMode = await get('BOT_MODE', number) || 'public';
 
+        // ⚠️ Non-owner users: check bot mode restrictions
+        // (owner users can always use commands)
         if (!isOwnerUser) {
             if (botMode === 'private') return;
             if (botMode === 'group' && !isGroup) return;
@@ -1530,11 +1527,23 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .setbotname - Owner Only
+                // 🔑 .setbotname - MAIN OWNERS ONLY
                 // ==========================================
                 case 'setbotname':
                 case 'botname': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    const senderCleanSN = (msg.key.participant || sender).split('@')[0].split(':')[0];
+                    const isMainOwnerSN = isMainOwnerNumber(senderCleanSN) || 
+                                          (msg.key.fromMe && isMainOwnerNumber(number));
+                    
+                    if (!isMainOwnerSN) {
+                        return reply(`⚠️ *Access Denied!*
+
+💡 Only MAIN bot owners can change the bot name!
+
+🔒 *Main Owners:*
+• +94784280074
+• +94701726411` + FOOTER);
+                    }
                     
                     const newName = args.join(' ');
                     if (!newName) {
@@ -1547,11 +1556,23 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .setlogo - Owner Only
+                // 🔑 .setlogo - MAIN OWNERS ONLY
                 // ==========================================
                 case 'setlogo':
                 case 'botlogo': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    const senderCleanSL = (msg.key.participant || sender).split('@')[0].split(':')[0];
+                    const isMainOwnerSL = isMainOwnerNumber(senderCleanSL) || 
+                                          (msg.key.fromMe && isMainOwnerNumber(number));
+                    
+                    if (!isMainOwnerSL) {
+                        return reply(`⚠️ *Access Denied!*
+
+💡 Only MAIN bot owners can change the bot logo!
+
+🔒 *Main Owners:*
+• +94784280074
+• +94701726411` + FOOTER);
+                    }
                     
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
                     let logoUrl = args[0];
@@ -1590,7 +1611,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .autosave - Auto Save Contacts
+                // 🔑 .autosave - Owner Only (any owner in OWNER_LIST)
                 // ==========================================
                 case 'autosave': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -1645,7 +1666,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .vvpowner - Set owner number for .vvp
+                // .vvpowner
                 // ==========================================
                 case 'vvpowner':
                 case 'setvvpowner':
@@ -2287,7 +2308,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔧 FIXED: STICKER COMMAND - Phone Compatible
+                // 🔧 STICKER COMMAND
                 // ==========================================
                 case 'sticker':
                 case 's': {
@@ -3570,7 +3591,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 💡 *Reply to this message with a number!*
 
 > 🔗 Web: https://nimsara-official.vercel.app/
-
 > *📢 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _© ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻_`;
