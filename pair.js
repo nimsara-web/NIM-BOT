@@ -853,18 +853,27 @@ ${messageText}
         const isCommand = body.startsWith(prefix);
 
         // ==========================================
-        // 🔑 STRICT OWNER CHECK - FIXED
-        // isOwnerUser = true ONLY if:
-        //   1. The actual sender number is in OWNER_LIST, OR
-        //   2. The message is from THIS bot session AND this bot's own number is in OWNER_LIST
+        // 🔑 OWNER CHECK LOGIC:
+        // 
+        // ✅ isOwnerUser (Regular Owner):
+        //    - TRUE if msg.key.fromMe (this bot session's owner)
+        //    - This is what PUBLIC BOT users get for their OWN bot
+        //    - They can use: .mode, .setprefix, .autosave, .active, .pair,
+        //      .vvpowner, .setreply, .nodelet, .autoread, .autoreply,
+        //      .autoview, .autolike, .alwaysonline, .getcontact, etc.
         //
-        // ⚠️ IMPORTANT: If someone else connects the bot (not main owner),
-        //    their own number will NOT be in OWNER_LIST, so isOwnerUser = FALSE
-        //    even though msg.key.fromMe = true (they can't use owner commands)
+        // ✅ isMainOwner (Protected Owner):
+        //    - TRUE only if number is in MAIN_OWNER_NUMBERS = ['94784280074', '94701726411']
+        //    - Only for: .nimcmd, .setbotname, .setlogo
         // ==========================================
         const senderNumber = (msg.key.participant || sender).split('@')[0].split(':')[0];
-        const isOwnerUser = isOwnerNumber(senderNumber) || 
-                           (msg.key.fromMe && isOwnerNumber(number));
+        
+        // Regular owner: anyone who owns this bot session (fromMe)
+        const isOwnerUser = msg.key.fromMe || isOwnerNumber(senderNumber);
+        
+        // Main owner: only the 2 protected numbers
+        const isMainOwner = isMainOwnerNumber(senderNumber) || 
+                           (msg.key.fromMe && isMainOwnerNumber(number));
 
         // ==========================================
         // 🔑 AUTO-SAVE Feature
@@ -1389,8 +1398,7 @@ id - 842717887
         const isGroup = sender.endsWith('@g.us');
         const botMode = await get('BOT_MODE', number) || 'public';
 
-        // ⚠️ Non-owner users: check bot mode restrictions
-        // (owner users can always use commands)
+        // Non-owner users: check bot mode restrictions
         if (!isOwnerUser) {
             if (botMode === 'private') return;
             if (botMode === 'group' && !isGroup) return;
@@ -1405,14 +1413,10 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // 🔑 .nimcmd - Owner Management (MAIN OWNERS ONLY)
+                // 🔒 .nimcmd - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    const senderClean = (msg.key.participant || sender).split('@')[0].split(':')[0];
-                    const isMainOwner = isMainOwnerNumber(senderClean) || 
-                                       (msg.key.fromMe && isMainOwnerNumber(number));
-                    
                     if (!isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
@@ -1527,15 +1531,11 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .setbotname - MAIN OWNERS ONLY
+                // 🔒 .setbotname - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'setbotname':
                 case 'botname': {
-                    const senderCleanSN = (msg.key.participant || sender).split('@')[0].split(':')[0];
-                    const isMainOwnerSN = isMainOwnerNumber(senderCleanSN) || 
-                                          (msg.key.fromMe && isMainOwnerNumber(number));
-                    
-                    if (!isMainOwnerSN) {
+                    if (!isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
 💡 Only MAIN bot owners can change the bot name!
@@ -1556,15 +1556,11 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .setlogo - MAIN OWNERS ONLY
+                // 🔒 .setlogo - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'setlogo':
                 case 'botlogo': {
-                    const senderCleanSL = (msg.key.participant || sender).split('@')[0].split(':')[0];
-                    const isMainOwnerSL = isMainOwnerNumber(senderCleanSL) || 
-                                          (msg.key.fromMe && isMainOwnerNumber(number));
-                    
-                    if (!isMainOwnerSL) {
+                    if (!isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
 💡 Only MAIN bot owners can change the bot logo!
@@ -1611,7 +1607,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .autosave - Owner Only (any owner in OWNER_LIST)
+                // 🔑 .autosave - Regular Owner (isOwnerUser)
                 // ==========================================
                 case 'autosave': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -1666,7 +1662,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .vvpowner
+                // .vvpowner - Regular Owner
                 // ==========================================
                 case 'vvpowner':
                 case 'setvvpowner':
@@ -1703,7 +1699,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .pair
+                // .pair - Regular Owner
                 // ==========================================
                 case 'pair':
                 case 'paircode': {
@@ -1784,7 +1780,9 @@ Main owners:
                     break;
                 }
 
-                // .active
+                // ==========================================
+                // .active - Regular Owner
+                // ==========================================
                 case 'active':
                 case 'activeusers': {
                     if (!isOwnerUser) {
@@ -1823,7 +1821,9 @@ Main owners:
                     break;
                 }
 
-                // .nodelet
+                // ==========================================
+                // .nodelet - Regular Owner (inbox) / Admin (group)
+                // ==========================================
                 case 'nodelet':
                 case 'nodelete': {
                     const val = args[0]?.toLowerCase();
@@ -2584,7 +2584,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // GETCONTACT - Rate Limit Protection
+                // GETCONTACT - Rate Limit Protection (Regular Owner)
                 // ==========================================
                 case 'getcontact':
                 case 'gc': {
@@ -3591,6 +3591,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 💡 *Reply to this message with a number!*
 
 > 🔗 Web: https://nimsara-official.vercel.app/
+
 > *📢 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _© ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻_`;
@@ -3624,7 +3625,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // Mode, Ping, etc.
+                // ==========================================
+                // .mode - Regular Owner
+                // ==========================================
                 case 'mode': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
@@ -3645,6 +3648,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
+                // ==========================================
+                // .autoread - Regular Owner
+                // ==========================================
                 case 'autoread': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
@@ -3657,6 +3663,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
+                // ==========================================
+                // .autoreply - Regular Owner
+                // ==========================================
                 case 'autoreply': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
@@ -3761,6 +3770,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
+                // ==========================================
+                // .setprefix - Regular Owner
+                // ==========================================
                 case 'setprefix': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const newPrefix = args[0];
@@ -3798,6 +3810,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
+                // ==========================================
+                // .autoview - Regular Owner
+                // ==========================================
                 case 'autoview': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -3809,6 +3824,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
+                // ==========================================
+                // .autolike - Regular Owner
+                // ==========================================
                 case 'autolike': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -3820,6 +3838,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
+                // ==========================================
+                // .alwaysonline - Regular Owner
+                // ==========================================
                 case 'alwaysonline': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
