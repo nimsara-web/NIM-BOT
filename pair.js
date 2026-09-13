@@ -54,7 +54,7 @@ const DEFAULT_OWNER_NUMBER = '94784280074';
 
 // 🔑 NIM API Key
 const NIM_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
-const ZANTA_API_BASE = 'https://api.zanta-mini.store';
+const NIM_API_BASE = 'https://api.nim-api.store';
 
 // ==========================================
 // 🔑 OWNER SYSTEM - MAIN OWNERS (PROTECTED)
@@ -87,6 +87,14 @@ const autoSaveSettings = new Map();
 // 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
 // ==========================================
 const getContactLocks = new Map();
+
+// ==========================================
+// 🛡️ AUTO-REPLY LOOP PREVENTION (NEW FIX)
+// ==========================================
+const autoReplyCooldown = new Map();       // sender -> lastReplyTime
+const autoReplyBotMsgCache = new Map();    // messageHash -> timestamp
+const AUTO_REPLY_COOLDOWN_MS = 8000;       // 8 seconds per sender
+const AUTO_REPLY_CACHE_TTL = 60000;        // 60 seconds cache
 
 // ==========================================
 // 🔑 STRICT Owner Check
@@ -236,6 +244,112 @@ async function sendWithTyping(sock, jid, message, options = {}) {
     } catch (e) {}
     
     return await sock.sendMessage(jid, message, options);
+}
+
+// ==========================================
+// 🛡️ AUTO-REPLY LOOP PREVENTION HELPERS (NEW)
+// ==========================================
+
+/**
+ * Check if this message is a bot-generated response
+ * (prevents loop between two bots replying to each other)
+ */
+function isBotResponseMessage(text, botName) {
+    if (!text) return true;
+    const lower = text.toLowerCase().trim();
+    
+    // Empty or too short
+    if (lower.length === 0) return true;
+    
+    // Common bot signature patterns
+    const botPatterns = [
+        '© ᴄʀᴇᴀᴛᴏʀ ʙʏ ɴɪᴍꜱᴀʀᴀ',
+        '© creator by nimsara',
+        'nim bot',
+        'nimsara',
+        'r2k gaming channels',
+        'payment details',
+        'commercial bank',
+        'lolc bank',
+        'dialog finance',
+        'peoples bank',
+        'ez cash',
+        'binance',
+        'thankyou yaluwe',
+        'thankyou !',
+        'hi! 👋',
+        'mokuth na innwa',
+        'good morning🌝',
+        'good night✨',
+        'bye🍻',
+        'eyaa hadapu bot',
+        'නෙත්මින්ත',
+        'නිම්සර',
+        'bot creator',
+        'bot name',
+        'activers',
+        'channel :',
+        '🤖',
+        '🎵',
+        '📥',
+        '🎬',
+        '⚠️',
+        '❌',
+        '✅',
+        '⚙️',
+        '👀',
+        '🏓',
+        'ᴄʀᴇᴀᴛᴏʀ',
+        'ʙʏ ɴɪᴍꜱᴀʀᴀ'
+    ];
+    
+    // If message contains bot signatures
+    for (const pattern of botPatterns) {
+        if (lower.includes(pattern.toLowerCase())) return true;
+    }
+    
+    // If message starts with bot name mention
+    if (botName && lower.includes(botName.toLowerCase())) return true;
+    
+    return false;
+}
+
+/**
+ * Check if the message sender is another bot
+ * Detects forwarded messages, business accounts, and known bot patterns
+ */
+function isFromAnotherBot(msg, body) {
+    if (!msg || !body) return false;
+    
+    // Check if message has bot-like context (forwarded newsletter)
+    const ctx = msg.message?.extendedTextMessage?.contextInfo;
+    if (ctx?.forwardedNewsletterMessageInfo) return true;
+    
+    // Check if the sender is a known bot number (from activeSockets)
+    const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
+    if (senderNum && activeSockets.has(senderNum)) return true;
+    
+    // Check for bot signatures in the message
+    if (isBotResponseMessage(body)) return true;
+    
+    return false;
+}
+
+/**
+ * Cleanup old entries from auto-reply cache
+ */
+function cleanupAutoReplyCache() {
+    const now = Date.now();
+    for (const [key, ts] of autoReplyBotMsgCache) {
+        if (now - ts > AUTO_REPLY_CACHE_TTL) {
+            autoReplyBotMsgCache.delete(key);
+        }
+    }
+    for (const [key, ts] of autoReplyCooldown) {
+        if (now - ts > AUTO_REPLY_COOLDOWN_MS * 3) {
+            autoReplyCooldown.delete(key);
+        }
+    }
 }
 
 // ==========================================
@@ -394,12 +508,12 @@ async function convertTtsToOpus(mp3Buffer) {
 }
 
 // ==========================================
-// 🔧 DOWNLOAD HELPERS - Zanta API
+// 🔧 DOWNLOAD HELPERS - NIM API
 // ==========================================
 
 async function downloadYoutubeAudio(youtubeUrl) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
+        const apiUrl = `${NIM_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
         const response = await axios.get(apiUrl, { timeout: 45000 });
         const audioUrl = response.data?.result?.url 
                       || response.data?.result?.download_url
@@ -407,11 +521,11 @@ async function downloadYoutubeAudio(youtubeUrl) {
                       || response.data?.url 
                       || response.data?.result?.audio;
         if (audioUrl && audioUrl.startsWith('http')) {
-            console.log('[YT AUDIO] ✅ Zanta API succeeded');
+            console.log('[YT AUDIO] ✅ NIM API succeeded');
             return audioUrl;
         }
     } catch (e) {
-        console.log('[YT AUDIO] Zanta API failed:', e.message);
+        console.log('[YT AUDIO] NIM API failed:', e.message);
     }
 
     try {
@@ -425,7 +539,7 @@ async function downloadYoutubeAudio(youtubeUrl) {
 
 async function downloadYoutubeVideo(youtubeUrl) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
+        const apiUrl = `${NIM_API_BASE}/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
         const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.url 
                       || response.data?.data?.url 
@@ -433,11 +547,11 @@ async function downloadYoutubeVideo(youtubeUrl) {
                       || response.data?.result?.download_url
                       || response.data?.downloadUrl;
         if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[YT VIDEO] ✅ Zanta API succeeded');
+            console.log('[YT VIDEO] ✅ NIM API succeeded');
             return videoUrl;
         }
     } catch (e) {
-        console.log('[YT VIDEO] Zanta API failed:', e.message);
+        console.log('[YT VIDEO] NIM API failed:', e.message);
     }
 
     try {
@@ -451,7 +565,7 @@ async function downloadYoutubeVideo(youtubeUrl) {
 
 async function downloadTikTok(tiktokUrl) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
+        const apiUrl = `${NIM_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
         const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.video 
                       || response.data?.result?.url
@@ -463,11 +577,11 @@ async function downloadTikTok(tiktokUrl) {
                       || response.data?.downloadUrl
                       || response.data?.result?.play;
         if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[TIKTOK] ✅ Zanta API succeeded');
+            console.log('[TIKTOK] ✅ NIM API succeeded');
             return videoUrl;
         }
     } catch (e) {
-        console.log('[TIKTOK] Zanta API failed:', e.message);
+        console.log('[TIKTOK] NIM API failed:', e.message);
     }
 
     try {
@@ -486,7 +600,7 @@ async function downloadTikTok(tiktokUrl) {
 
 async function downloadFacebook(fbUrl) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(fbUrl)}`;
+        const apiUrl = `${NIM_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(fbUrl)}`;
         const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.hd 
                       || response.data?.result?.sd
@@ -496,11 +610,11 @@ async function downloadFacebook(fbUrl) {
                       || response.data?.hd
                       || response.data?.sd;
         if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[FB] ✅ Zanta API succeeded');
+            console.log('[FB] ✅ NIM API succeeded');
             return videoUrl;
         }
     } catch (e) {
-        console.log('[FB] Zanta API failed:', e.message);
+        console.log('[FB] NIM API failed:', e.message);
     }
 
     try {
@@ -514,17 +628,17 @@ async function downloadFacebook(fbUrl) {
 
 async function downloadInstagram(igUrl) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(igUrl)}`;
+        const apiUrl = `${NIM_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(igUrl)}`;
         const response = await axios.get(apiUrl, { timeout: 45000 });
         const mediaData = response.data?.result 
                        || response.data?.data 
                        || response.data?.medias;
         if (mediaData && Array.isArray(mediaData) && mediaData.length > 0) {
-            console.log('[IG] ✅ Zanta API succeeded');
+            console.log('[IG] ✅ NIM API succeeded');
             return mediaData;
         }
     } catch (e) {
-        console.log('[IG] Zanta API failed:', e.message);
+        console.log('[IG] NIM API failed:', e.message);
     }
 
     try {
@@ -540,7 +654,7 @@ async function downloadInstagram(igUrl) {
 
 async function searchMovie(query) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/movie/search?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
+        const apiUrl = `${NIM_API_BASE}/api/movie/search?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
         const response = await axios.get(apiUrl, { timeout: 30000 });
         return response.data?.result || response.data?.data || response.data?.results;
     } catch (e) {
@@ -551,7 +665,7 @@ async function searchMovie(query) {
 
 async function downloadMovie(movieId) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/movie/download?apiKey=${NIM_API_KEY}&id=${encodeURIComponent(movieId)}`;
+        const apiUrl = `${NIM_API_BASE}/api/movie/download?apiKey=${NIM_API_KEY}&id=${encodeURIComponent(movieId)}`;
         const response = await axios.get(apiUrl, { timeout: 45000 });
         return response.data?.result || response.data?.data || response.data?.downloadUrl;
     } catch (e) {
@@ -562,12 +676,12 @@ async function downloadMovie(movieId) {
 
 async function askAI(query) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/ai/gpt?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
+        const apiUrl = `${NIM_API_BASE}/api/ai/gpt?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
         const response = await axios.get(apiUrl, { timeout: 30000 });
         const answer = response.data?.result || response.data?.data || response.data?.response || response.data?.answer;
         if (answer) return answer;
     } catch (e) {
-        console.log('[AI] Zanta API failed:', e.message);
+        console.log('[AI] NIM API failed:', e.message);
     }
 
     const apis = [
@@ -588,7 +702,7 @@ async function askAI(query) {
 
 async function generateAIImage(prompt) {
     try {
-        const apiUrl = `${ZANTA_API_BASE}/api/ai/imagine?apiKey=${NIM_API_KEY}&prompt=${encodeURIComponent(prompt)}`;
+        const apiUrl = `${NIM_API_BASE}/api/ai/imagine?apiKey=${NIM_API_KEY}&prompt=${encodeURIComponent(prompt)}`;
         const response = await axios.get(apiUrl, { timeout: 45000 });
         const imageUrl = response.data?.result?.url || response.data?.data?.url || response.data?.url || response.data?.result;
         if (imageUrl && imageUrl.startsWith('http')) return imageUrl;
@@ -1232,7 +1346,9 @@ ${messageText}
             return;
         }
 
-        // Auto-reply
+        // ==========================================
+        // 🛡️ AUTO-REPLY WITH LOOP PREVENTION (FIXED)
+        // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off';
 
         if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
@@ -1243,49 +1359,78 @@ ${messageText}
                 (global.autoReplyMode === 'group' && isGroup);
 
             if (shouldAutoReply) {
-                const textLower = body.toLowerCase().trim();
-                const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
-                
-                const botResponsePatterns = [
-                    'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
-                    'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
-                    '🤖', '🎵', '📥', '🎬', '⚠️', '❌', '✅', '⚙️', '👀', '🏓'
-                ];
-                
-                const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
-                
-                if (isFromBot || isBotResponse) return;
+                try {
+                    cleanupAutoReplyCache();
+                    
+                    const textLower = body.toLowerCase().trim();
+                    const botName = await get('BOT_NAME', number) || 'NIM BOT';
+                    
+                    // 🛡️ FIX 1: Skip if message is from another bot
+                    if (isFromAnotherBot(msg, body)) {
+                        console.log(`[AUTOREPLY] ⏭️ Skipped (bot message detected)`);
+                        return;
+                    }
+                    
+                    // 🛡️ FIX 2: Skip if this exact message was already replied to recently
+                    const msgHash = `${sender}_${body.substring(0, 50)}`;
+                    if (autoReplyBotMsgCache.has(msgHash)) {
+                        console.log(`[AUTOREPLY] ⏭️ Skipped (duplicate within cache)`);
+                        return;
+                    }
+                    
+                    // 🛡️ FIX 3: Per-sender cooldown
+                    const lastReply = autoReplyCooldown.get(sender);
+                    if (lastReply && (Date.now() - lastReply) < AUTO_REPLY_COOLDOWN_MS) {
+                        console.log(`[AUTOREPLY] ⏭️ Skipped (cooldown active)`);
+                        return;
+                    }
+                    
+                    // 🛡️ FIX 4: Skip messages that contain bot signatures
+                    if (isBotResponseMessage(body, botName)) {
+                        console.log(`[AUTOREPLY] ⏭️ Skipped (bot signature detected)`);
+                        return;
+                    }
+                    
+                    // 🛡️ FIX 5: Skip very long messages (likely bot output)
+                    if (body.length > 500) {
+                        console.log(`[AUTOREPLY] ⏭️ Skipped (message too long)`);
+                        return;
+                    }
+                    
+                    // Mark this message as processed
+                    autoReplyBotMsgCache.set(msgHash, Date.now());
+                    autoReplyCooldown.set(sender, Date.now());
 
-                global.customReplies = global.customReplies || {};
-                if (global.customReplies[textLower]) {
-                    await reply(global.customReplies[textLower] + FOOTER);
-                    return;
-                }
+                    global.customReplies = global.customReplies || {};
+                    if (global.customReplies[textLower]) {
+                        await reply(global.customReplies[textLower] + FOOTER);
+                        return;
+                    }
 
-                const words = textLower.split(/\s+/).filter(w => w.length > 0);
-                const hasExactWord = (keyword) => words.includes(keyword);
-                const isExactMessage = (phrase) => textLower === phrase;
+                    const words = textLower.split(/\s+/).filter(w => w.length > 0);
+                    const hasExactWord = (keyword) => words.includes(keyword);
+                    const isExactMessage = (phrase) => textLower === phrase;
 
-                if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || isExactMessage('හායි') || isExactMessage('hello')) {
-                    await reply('Hi! 👋' + FOOTER);
-                } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නේ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
-                    await reply('Mokuth Na innwa😊' + FOOTER);
-                } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මෝනින්')) {
-                    await reply('Good Morning🌝' + FOOTER);
-                } else if (hasExactWord('gn') || isExactMessage('good night') || isExactMessage('ගුඩ් නයිට්')) {
-                    await reply('Good Night✨' + FOOTER);
-                } else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || isExactMessage('good bye')) {
-                    await reply('Bye🍻' + FOOTER);
-                } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
-                    await reply(`*🔦 R2K Gaming Channels 🔦*
+                    if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || isExactMessage('හායි') || isExactMessage('hello')) {
+                        await reply('Hi! 👋' + FOOTER);
+                    } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නේ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
+                        await reply('Mokuth Na innwa😊' + FOOTER);
+                    } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මෝනින්')) {
+                        await reply('Good Morning🌝' + FOOTER);
+                    } else if (hasExactWord('gn') || isExactMessage('good night') || isExactMessage('ගුඩ් නයිට්')) {
+                        await reply('Good Night✨' + FOOTER);
+                    } else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || isExactMessage('good bye')) {
+                        await reply('Bye🍻' + FOOTER);
+                    } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
+                        await reply(`*🔦 R2K Gaming Channels 🔦*
 
 💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
 💓Youtube - https://www.youtube.com/@rush.2.kill__0
 💓Fb - https://www.facebook.com/profile.php?id=61581297341821
 
 *\`Thankyou Yaluwe !\`*` + FOOTER);
-                } else if (textLower.includes('payment') || textLower.includes('bank details')) {
-                    await reply(`*💰Payment Details*
+                    } else if (textLower.includes('payment') || textLower.includes('bank details')) {
+                        await reply(`*💰Payment Details*
 
 💡Bank - Commercial Bank
 Account number - 8029210301
@@ -1325,20 +1470,23 @@ id - 842717887
 
 
 *\`Thankyou !\`*` + FOOTER);
-                } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
-                    try {
-                        const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
-                        const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
-                        const audioBuffer = Buffer.from(response.data);
-                        await reply({
-                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER,
-                            audio: audioBuffer,
-                            mimetype: 'audio/mp4',
-                            ptt: false
-                        });
-                    } catch (err) {
-                        await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER);
+                    } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
+                        try {
+                            const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
+                            const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
+                            const audioBuffer = Buffer.from(response.data);
+                            await reply({
+                                text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER,
+                                audio: audioBuffer,
+                                mimetype: 'audio/mp4',
+                                ptt: false
+                            });
+                        } catch (err) {
+                            await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER);
+                        }
                     }
+                } catch (e) {
+                    console.error('[AUTOREPLY] Error:', e.message);
                 }
             }
         }
@@ -3531,6 +3679,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 💡 *Reply to this message with a number!*
 
 > 🔗 Web: https://nimsara-official.vercel.app/
+
 > *📢 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _© ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻_`;
