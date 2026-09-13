@@ -2,6 +2,7 @@
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
  * Mode: Full Features Enabled
+ * Fixed: Sticker, Anti-Delete, GetContact Rate Limiting
  */
 const {
     default: makeWASocket,
@@ -26,6 +27,14 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 const FormData = require('form-data');
 
+// Sharp for sticker conversion
+let sharp;
+try {
+    sharp = require('sharp');
+} catch (e) {
+    console.log('⚠️ sharp not installed. Sticker will use raw buffer.');
+}
+
 const Session = require('./Id');
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb');
 
@@ -36,10 +45,10 @@ const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r'
 const CHANNEL_JID = '120363362308230584@newsletter';
 const DEFAULT_OWNER_NUMBER = '94784280074';
 
-// 🔥 Zanta API Key
+// 🔑 Zanta API Key
 const ZANTA_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
 
-const FOOTER = '\n\n> *Creator by Nimsara* 🧛🏻';
+const FOOTER = '\n\n> *Creator by Nimsara* 🧃🇱🇰';
 
 const socketCreationTime = new Map();
 const activeSockets = new Map();
@@ -53,7 +62,12 @@ const groupWelcome = new Map();
 const chatNodelete = new Map();
 
 // ==========================================
-// 🔥 Get Owner Number from DB (per bot session)
+// 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
+// ==========================================
+const getContactLocks = new Map(); // number -> { running: bool, sent: number, startTime }
+
+// ==========================================
+// 🔑 Get Owner Number from DB (per bot session)
 // ==========================================
 async function getOwnerNumber(botNumber) {
     try {
@@ -81,6 +95,45 @@ function getMessageBody(msg) {
         '';
 }
 
+// ==========================================
+// 🔧 FIXED: Extract quoted/actual message properly
+// ==========================================
+function unwrapMessage(message) {
+    if (!message) return null;
+    
+    // Unwrap all nested containers
+    while (
+        message.ephemeralMessage ||
+        message.viewOnceMessage ||
+        message.viewOnceMessageV2 ||
+        message.viewOnceMessageV2Extension ||
+        message.documentWithCaptionMessage
+    ) {
+        if (message.ephemeralMessage) message = message.ephemeralMessage.message;
+        else if (message.viewOnceMessage) message = message.viewOnceMessage.message;
+        else if (message.viewOnceMessageV2) message = message.viewOnceMessageV2.message;
+        else if (message.viewOnceMessageV2Extension) message = message.viewOnceMessageV2Extension.message;
+        else if (message.documentWithCaptionMessage) message = message.documentWithCaptionMessage.message;
+    }
+    
+    return message;
+}
+
+// ==========================================
+// 🔧 FIXED: Get media type from message
+// ==========================================
+function getMediaType(message) {
+    if (!message) return null;
+    const unwrapped = unwrapMessage(message);
+    if (!unwrapped) return null;
+    
+    const types = ['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'];
+    for (const type of types) {
+        if (unwrapped[type]) return { type, data: unwrapped[type] };
+    }
+    return null;
+}
+
 async function getAudioBuffer(url) {
     try {
         const response = await fetch(url);
@@ -94,7 +147,7 @@ async function getAudioBuffer(url) {
 }
 
 // ==========================================
-// 🔥 Channel Forward Context Info
+// 🔑 Channel Forward Context Info
 // ==========================================
 function getChannelContext() {
     return {
@@ -109,7 +162,7 @@ function getChannelContext() {
 }
 
 // ==========================================
-// 🔥 Bot Detection Bypass Helpers
+// 🔑 Bot Detection Bypass Helpers
 // ==========================================
 async function humanDelay(minMs = 1500, maxMs = 3500) {
     const randomDelay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
@@ -128,7 +181,7 @@ async function sendWithTyping(sock, jid, message, options = {}) {
 }
 
 // ==========================================
-// 🔥 Download Helpers
+// 🔑 Download Helpers
 // ==========================================
 async function downloadYoutubeAudio(youtubeUrl) {
     try {
@@ -148,21 +201,17 @@ async function downloadYoutubeAudio(youtubeUrl) {
 }
 
 // ==========================================
-// 🔥 YouTube Video Download via Zanta API
+// 🔑 YouTube Video Download via Zanta API
 // ==========================================
 async function downloadYoutubeVideo(youtubeUrl) {
-    // Try 1: Zanta Mini API
     try {
         const apiUrl = `https://api.zanta-mini.store/api/ytmp4-v2?apiKey=${ZANTA_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
-        
         const response = await axios.get(apiUrl, { timeout: 30000 });
-        
         const videoUrl = response.data?.result?.url 
                       || response.data?.data?.url 
                       || response.data?.url 
                       || response.data?.result?.download_url
                       || response.data?.downloadUrl;
-        
         if (videoUrl && videoUrl.startsWith('http')) {
             console.log('[YT VIDEO] ✅ Zanta API succeeded');
             return videoUrl;
@@ -171,7 +220,6 @@ async function downloadYoutubeVideo(youtubeUrl) {
         console.log('[YT VIDEO] Zanta API failed:', e.message);
     }
 
-    // Try 2: yt-dlp
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url -f "best[ext=mp4]/best" "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
@@ -183,7 +231,6 @@ async function downloadYoutubeVideo(youtubeUrl) {
         console.log('[YT VIDEO] yt-dlp failed');
     }
 
-    // Try 3: ytdl-core
     try {
         const ytdl = require('@distube/ytdl-core');
         const info = await ytdl.getInfo(youtubeUrl);
@@ -200,16 +247,12 @@ async function downloadYoutubeVideo(youtubeUrl) {
 }
 
 // ==========================================
-// 🔥 FIXED: TikTok Download via Zanta API
+// 🔑 FIXED: TikTok Download via Zanta API
 // ==========================================
 async function downloadTikTok(tiktokUrl) {
-    // Try 1: Zanta Mini API (NEW)
     try {
         const apiUrl = `https://api.zanta-mini.store/api/tiktok?apiKey=${ZANTA_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
-        
         const response = await axios.get(apiUrl, { timeout: 30000 });
-        
-        // Try multiple response formats
         const videoUrl = response.data?.result?.video 
                       || response.data?.result?.url
                       || response.data?.data?.video 
@@ -219,7 +262,6 @@ async function downloadTikTok(tiktokUrl) {
                       || response.data?.result?.download_url
                       || response.data?.downloadUrl
                       || response.data?.result?.play;
-        
         if (videoUrl && videoUrl.startsWith('http')) {
             console.log('[TIKTOK] ✅ Zanta API succeeded');
             return videoUrl;
@@ -228,7 +270,6 @@ async function downloadTikTok(tiktokUrl) {
         console.log('[TIKTOK] Zanta API failed:', e.message);
     }
 
-    // Try 2: yt-dlp (fallback)
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url "${tiktokUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
@@ -240,7 +281,6 @@ async function downloadTikTok(tiktokUrl) {
         console.log('[TIKTOK] yt-dlp failed');
     }
 
-    // Try 3: siputzx API (last fallback)
     try {
         const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 20000 });
         const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url;
@@ -336,6 +376,37 @@ async function generateFakeChat(name, message) {
 }
 
 // ==========================================
+// 🔧 FIXED: Sticker Conversion with Sharp
+// ==========================================
+async function convertToSticker(buffer, isVideo = false) {
+    try {
+        if (sharp) {
+            // Use sharp for proper conversion
+            const sharpInstance = sharp(buffer, { animated: isVideo });
+            
+            if (isVideo) {
+                // For video/gif → animated webp
+                return await sharpInstance
+                    .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+                    .webp({ quality: 80, effort: 3 })
+                    .toBuffer();
+            } else {
+                // For image → static webp
+                return await sharpInstance
+                    .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+                    .webp({ quality: 85, effort: 3 })
+                    .toBuffer();
+            }
+        }
+        // Fallback: return raw buffer (WhatsApp may auto-convert)
+        return buffer;
+    } catch (e) {
+        console.error('Sticker conversion error:', e.message);
+        return buffer;
+    }
+}
+
+// ==========================================
 // MongoDB Auth State
 // ==========================================
 async function useMongoDBAuthState(number) {
@@ -403,46 +474,87 @@ async function useMongoDBAuthState(number) {
 // ==========================================
 function setupCommandHandlers(socket, number) {
 
-    // Anti-Delete handler
+    // ==========================================
+    // 🔧 FIXED: Anti-Delete handler with better detection
+    // ==========================================
     socket.ev.on('messages.update', async (updates) => {
-        for (const { key, update } of updates) {
-            const protocolMsg = update?.protocolMessage || update?.message?.protocolMessage;
-            
-            if (protocolMsg) {
-                if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
-                    const revokedId = protocolMsg.key?.id || protocolMsg.stanzaId;
-                    if (!revokedId) continue;
+        try {
+            for (const update of updates) {
+                const { key, update: updateData } = update;
+                
+                // Method 1: Check protocolMessage (delete/revoke)
+                const protocolMsg = updateData?.protocolMessage || updateData?.message?.protocolMessage;
+                
+                let revokedId = null;
+                
+                if (protocolMsg) {
+                    if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
+                        revokedId = protocolMsg.key?.id || protocolMsg.stanzaId;
+                    }
+                }
+                
+                // Method 2: Check direct revoke key
+                if (!revokedId && updateData?.messageStubType === 1) {
+                    // REVOKE stub type
+                    revokedId = key?.id;
+                }
+                
+                // Method 3: Check message === null (deleted)
+                if (!revokedId && updateData?.message === null && key?.id) {
+                    revokedId = key.id;
+                }
+                
+                if (!revokedId) continue;
 
-                    let cachedMsg = messageCache.get(revokedId);
-                    if (!cachedMsg) {
-                        for (const [cacheKey, value] of messageCache) {
-                            if (value.key?.id === revokedId || value.key?.stanzaId === revokedId) {
-                                cachedMsg = value;
-                                break;
-                            }
+                // Find cached message
+                let cachedMsg = messageCache.get(revokedId);
+                if (!cachedMsg) {
+                    for (const [cacheKey, value] of messageCache) {
+                        if (value?.key?.id === revokedId || value?.key?.stanzaId === revokedId) {
+                            cachedMsg = value;
+                            break;
                         }
                     }
+                }
 
-                    if (cachedMsg) {
-                        const chatJid = cachedMsg.key.remoteJid;
-                        const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
-                        const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
+                if (!cachedMsg) continue;
 
-                        deletedMessages.set(chatJid, {
-                            sender: senderJid,
-                            text: messageText,
-                            time: new Date().toLocaleString(),
-                            originalMsg: cachedMsg,
-                            keyId: revokedId,
-                            timestamp: Date.now()
-                        });
+                const chatJid = cachedMsg.key.remoteJid;
+                const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
+                const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
 
-                        const nodeleteStatus = chatNodelete.get(chatJid) || await get(`NODELETE_${chatJid}`, number) || 'off';
-                        
-                        if (nodeleteStatus === 'on') {
-                            try {
-                                const senderName = senderJid.split('@')[0];
-                                const resendText = `🗑️ *DELETED MESSAGE DETECTED!*
+                // Store deleted message
+                deletedMessages.set(chatJid, {
+                    sender: senderJid,
+                    text: messageText,
+                    time: new Date().toLocaleString(),
+                    originalMsg: cachedMsg,
+                    keyId: revokedId,
+                    timestamp: Date.now()
+                });
+
+                console.log(`[ANTI-DELETE] ✅ Captured: ${senderJid} - ${messageText.substring(0, 50)}`);
+
+                // Check if NODELETE is ON for this chat
+                let nodeleteStatus = chatNodelete.get(chatJid);
+                if (nodeleteStatus === undefined || nodeleteStatus === null) {
+                    try { 
+                        nodeleteStatus = await get(`NODELETE_${chatJid}`, number); 
+                    } catch (e) {}
+                    if (!nodeleteStatus) {
+                        try { 
+                            const cleanKey = chatJid.replace(/[^0-9]/g, '');
+                            nodeleteStatus = await get(`NODELETE_${cleanKey}`, number); 
+                        } catch (e) {}
+                    }
+                    nodeleteStatus = nodeleteStatus || 'off';
+                    chatNodelete.set(chatJid, nodeleteStatus);
+                }
+                
+                if (nodeleteStatus === 'on') {
+                    try {
+                        const senderName = senderJid.split('@')[0];
+                        const resendText = `🗑️ *DELETED MESSAGE DETECTED!*
 
 👤 *Sender:* @${senderName}
 ⏰ *Time:* ${new Date().toLocaleString()}
@@ -451,30 +563,31 @@ ${messageText}
 
 > _Auto-recovered by NIM BOT_${FOOTER}`;
 
-                                await sendWithTyping(socket, chatJid, {
-                                    text: resendText,
-                                    mentions: [senderJid],
-                                    contextInfo: getChannelContext()
-                                });
+                        await sendWithTyping(socket, chatJid, {
+                            text: resendText,
+                            mentions: [senderJid],
+                            contextInfo: getChannelContext()
+                        });
 
-                                console.log(`[NODELETE] ✅ Auto-resent deleted msg in ${chatJid}`);
-                            } catch (e) {
-                                console.log(`[NODELETE] ❌ Error:`, e.message);
-                            }
-                        }
-
-                        console.log(`[ANTI-DELETE] ✅ Captured from: ${senderJid}`);
+                        console.log(`[NODELETE] ✅ Auto-resent deleted msg in ${chatJid}`);
+                    } catch (e) {
+                        console.log(`[NODELETE] ❌ Error:`, e.message);
                     }
                 }
             }
+        } catch (e) {
+            console.error('[ANTI-DELETE] Handler error:', e.message);
         }
     });
 
+    // ==========================================
     // Main message handler
+    // ==========================================
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg) return;
 
+        // Cache message
         if (msg.key && msg.key.id) {
             messageCache.set(msg.key.id, msg);
             if (msg.key.stanzaId) messageCache.set(msg.key.stanzaId, msg);
@@ -521,7 +634,7 @@ ${messageText}
 
             if (reactEmoji && isCommand) {
                 try {
-                    const emojis = ['✅', '👍', '🎯', '⚡', '🔥', '💫', '✨'];
+                    const emojis = ['✅', '👌', '🔥', '⚡', '🔦', '💫', '✔️'];
                     const emoji = emojis[Math.floor(Math.random() * emojis.length)];
                     await socket.sendMessage(sender, {
                         react: { text: emoji, key: msg.key }
@@ -569,7 +682,7 @@ ${messageText}
                                     text: `🚫 *LINK DETECTED!*
 
 👤 @${userName}
-⚠️ Links are not allowed in this group!
+⚡️ Links are not allowed in this group!
 🔗 *Anti-Link: ON*` + FOOTER,
                                     mentions: [msg.key.participant],
                                     contextInfo: channelInfo
@@ -599,7 +712,7 @@ ${messageText}
 
         const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
         
-        const hasMenuKeywords = quotedText.includes('𝗕𝗢𝗧 𝗠𝗘𝗡𝗨') || 
+        const hasMenuKeywords = quotedText.includes('𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨') || 
                                quotedText.includes('MENU CATEGORIES') ||
                                quotedText.includes('Reply to this message with a number') ||
                                (quotedText.includes('DOWNLOAD COMMANDS') && quotedText.includes('SETTINGS COMMANDS')) ||
@@ -615,116 +728,116 @@ ${messageText}
 
             switch(categoryNum) {
                 case 1:
-                    categoryMenu = `*╭─\`📥 DOWNLOAD COMMANDS\`┈⊷*
-*╎*
-*╎ 🎵 .song [name]*
-*╎ 🎬 .tt / .tiktok [url]*
-*╎ 🎬 .yt / .youtube [url] [video/audio]*
-*╎ 🎬 .fb / .facebook [url]*
-*╎ 📸 .ig / .instagram [url]*
-*╎ 🔗 .tourl / .url*
-*╎ 📸 .vv / .viewonce*
-*╎ 📸 .vvp / .vvpowner*
-*╎ 📥 .send / .save*
-*╰───────────────────────*
+                    categoryMenu = `*╭─\`📥 DOWNLOAD COMMANDS\`┤⭓*
+*┃*
+*┃ 🎵 .song [name]*
+*┃ 🎬 .tt / .tiktok [url]*
+*┃ 🎬 .yt / .youtube [url] [video/audio]*
+*┃ 🎬 .fb / .facebook [url]*
+*┃ 📸 .ig / .instagram [url]*
+*┃ 🔗 .tourl / .url*
+*┃ 📸 .vv / .viewonce*
+*┃ 📸 .vvp / .vvpowner*
+*┃ 📥 .send / .save*
+*╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 2:
-                    categoryMenu = `*╭─\`⚙️ SETTINGS COMMANDS\`┈⊷*
-*╎*
-*╎ 📋 .settings*
-*╎ 🔀 .mode [public/group/inbox/private]*
-*╎ 👁️ .autoread [all/cmd/off]*
-*╎ 🤖 .autoreply [all/inbox/group/off]*
-*╎ 📷 .autoview [on/off]*
-*╎ ❤️ .autolike [on/off]*
-*╎ 🟢 .alwaysonline [on/off]*
-*╎ 🔗 .antilink [on/off]*
-*╎ 👋 .welcome [on/off]*
-*╎ 🗑️ .nodelet [on/off]*
-*╎ 🔤 .setprefix [prefix]*
-*╰───────────────────────*
+                    categoryMenu = `*╭─\`⚙️ SETTINGS COMMANDS\`┤⭓*
+*┃*
+*┃ 📋 .settings*
+*┃ 🔐 .mode [public/group/inbox/private]*
+*┃ 👁️ .autoread [all/cmd/off]*
+*┃ 🤖 .autoreply [all/inbox/group/off]*
+*┃ 📷 .autoview [on/off]*
+*┃ ❤️ .autolike [on/off]*
+*┃ 🟢 .alwaysonline [on/off]*
+*┃ 🔗 .antilink [on/off]*
+*┃ 👋 .welcome [on/off]*
+*┃ 🗑️ .nodelet [on/off]*
+*┃ 🔤 .setprefix [prefix]*
+*╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 3:
-                    categoryMenu = `*╭─\`👑 OWNER COMMANDS\`┈⊷*
-*╎*
-*╎ 👤 .owner*
-*╎ 📋 .settings*
-*╎ 📊 .active*
-*╎ 🔗 .pair [number]*
-*╎ 📞 .vvpowner [number]*
-*╎ 🔤 .setprefix [prefix]*
-*╎ 💾 .setreply [trigger] [response]*
-*╎ 📝 .note save [name] [content]*
-*╰───────────────────────*
+                    categoryMenu = `*╭─\`👑 OWNER COMMANDS\`┤⭓*
+*┃*
+*┃ 👤 .owner*
+*┃ 📋 .settings*
+*┃ 📊 .active*
+*┃ 🔗 .pair [number]*
+*┃ 📞 .vvpowner [number]*
+*┃ 🔤 .setprefix [prefix]*
+*┃ 💾 .setreply [trigger] [response]*
+*┃ 📝 .note save [name] [content]*
+*╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 4:
-                    categoryMenu = `*╭─\`🛠️ UTILITY COMMANDS\`┈⊷*
-*╎*
-*╎ 🏓 .ping - ⏱️ .runtime*
-*╎ 🕐 .time / .date*
-*╎ 📍 .jid*
-*╎ ❤️ .alive / .status*
-*╎ 🗑️ .remsg / .delete*
-*╎ 👤 .whois / .userinfo*
-*╎ 🔐 .password [length]*
-*╎ 🔗 .short [url]*
-*╎ 📱 .qr [text]*
-*╎ 🌤️ .weather [city]*
-*╎ 🌐 .ip [domain]*
-*╎ 🔐 .base64 [enc/dec] [text]*
-*╎ ✅ .check [number]*
-*╎ 💰 .crypto [coin]*
-*╰───────────────────────*
+                    categoryMenu = `*╭─\`🛠️ UTILITY COMMANDS\`┤⭓*
+*┃*
+*┃ 🏓 .ping - ⏱️ .runtime*
+*┃ 🕐 .time / .date*
+*┃ 📍 .jid*
+*┃ ❤️ .alive / .status*
+*┃ 🗑️ .remsg / .delete*
+*┃ 👤 .whois / .userinfo*
+*┃ 🔐 .password [length]*
+*┃ 🔗 .short [url]*
+*┃ 📱 .qr [text]*
+*┃ 🌍 .weather [city]*
+*┃ 🌐 .ip [domain]*
+*┃ 🔐 .base64 [enc/dec] [text]*
+*┃ ✅ .check [number]*
+*┃ 💰 .crypto [coin]*
+*╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 5:
-                    categoryMenu = `*╭─\`🤖 AI & CONVERT\`┈⊷*
-*╎*
-*╎ 🤖 .ai / .gpt [question]*
-*╎ 🌐 .tr [lang]*
-*╎ 🎨 .imagine [prompt]*
-*╎ 📸 .sticker / .s*
-*╎ 📱 .fakechat [name|msg]*
-*╎ 📸 .ss [url]*
-*╎ 🎤 .tts [text]*
-*╎ 🎨 .textimg [text]*
-*╰───────────────────────*
+                    categoryMenu = `*╭─\`🤖 AI & CONVERT\`┤⭓*
+*┃*
+*┃ 🤖 .ai / .gpt [question]*
+*┃ 🌐 .tr [lang]*
+*┃ 🎨 .imagine [prompt]*
+*┃ 📸 .sticker / .s*
+*┃ 📱 .fakechat [name|msg]*
+*┃ 📸 .ss [url]*
+*┃ 🎤 .tts [text]*
+*┃ 🎨 .textimg [text]*
+*╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 6:
-                    categoryMenu = `*╭─\`👥 GROUP ADMIN\`┈⊷*
-*╎*
-*╎ 📢 .tagall [msg]*
-*╎ 👢 .kick*
-*╎ 👑 .promote*
-*╎ 👤 .demote*
-*╎ 🔇 .mute*
-*╎ 🔊 .unmute*
-*╎ 📊 .ginfo / .groupinfo*
-*╎ 📊 .poll [Q|opt1|opt2]*
-*╎ 📞 .getcontact*
-*╰───────────────────────*
+                    categoryMenu = `*╭─\`👑 GROUP ADMIN\`┤⭓*
+*┃*
+*┃ 📢 .tagall [msg]*
+*┃ 👢 .kick*
+*┃ 👑 .promote*
+*┃ 👤 .demote*
+*┃ 🔇 .mute*
+*┃ 🔊 .unmute*
+*┃ 📊 .ginfo / .groupinfo*
+*┃ 📊 .poll [Q|opt1|opt2]*
+*┃ 📞 .getcontact*
+*╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
                 case 7:
-                    categoryMenu = `*╭─\`🎮 FUN COMMANDS\`┈⊷*
-*╎*
-*╎ 🎯 .quote*
-*╎ 🎲 .dice*
-*╎ 🎰 .flip*
-*╎ 😂 .joke / .sijoke*
-*╎ 🔢 .random [min] [max]*
-*╎ 🎂 .bday set [DD/MM]*
-*╰───────────────────────*
+                    categoryMenu = `*╭─\`🎮 FUN COMMANDS\`┤⭓*
+*┃*
+*┃ 🔥 .quote*
+*┃ 🎲 .dice*
+*┃ 🪙 .flip*
+*┃ 😂 .joke / .sijoke*
+*┃ 🔢 .random [min] [max]*
+*┃ 🎂 .bday set [DD/MM]*
+*╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
                     break;
@@ -751,10 +864,10 @@ ${messageText}
             const followStatus = isFollowing ? '✅ Followed' : '❌ Not Followed';
 
             const mainMenu = `
-*👋 ${botName.toUpperCase()} 🧛🏻*
+*👋 ${botName.toUpperCase()} 🧃🇱🇰*
 *--The Mini Whatsapp Bot Experience--*
 
-> Created By Nimsara 🧛🏻
+> Created By Nimsara 🧃🇱🇰
 > 🪀 Contact - 0784280074
 
 ─────────────────────
@@ -765,22 +878,22 @@ ${messageText}
 > Bot Creator : NIMSARA
 ─────────────────────
 
-*╭─\`𝗕𝗢𝗧 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┈⊷*
-*╎*
-*╎ 1️⃣ - 📥 DOWNLOAD COMMANDS*
-*╎ 2️⃣ - ⚙️ SETTINGS COMMANDS*
-*╎ 3️⃣ - 👑 OWNER COMMANDS*
-*╎ 4️⃣ - 🛠️ UTILITY COMMANDS*
-*╎ 5️⃣ - 🤖 AI & CONVERT*
-*╎ 6️⃣ - 👥 GROUP ADMIN*
-*╎ 7️⃣ - 🎮 FUN COMMANDS*
-*╎*
-*╰───────────────────────*
+*╭─\`𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┤⭓*
+*┃*
+*┃ 1️⃣ - 📥 DOWNLOAD COMMANDS*
+*┃ 2️⃣ - ⚙️ SETTINGS COMMANDS*
+*┃ 3️⃣ - 👑 OWNER COMMANDS*
+*┃ 4️⃣ - 🛠️ UTILITY COMMANDS*
+*┃ 5️⃣ - 🤖 AI & CONVERT*
+*┃ 6️⃣ - 👑 GROUP ADMIN*
+*┃ 7️⃣ - 🎮 FUN COMMANDS*
+*┃*
+*╰──────────────────────*
 
 💡 *Reply to this message with a number!*
 
 🔗 Web: https://nimsara-official.vercel.app/
-*🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
+*📢 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _MADE BY NIMSARA_`;
 
@@ -812,7 +925,7 @@ ${messageText}
                 const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
                 
                 const botResponsePatterns = [
-                    'hi! 👋', 'mokuth na innwa', 'good morning🌤️', 'good night✨',
+                    'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
                     'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
                     '🤖', '🎵', '📥', '🎬', '⚠️', '❌', '✅', '⚙️', '👀', '🏓'
                 ];
@@ -833,16 +946,16 @@ ${messageText}
 
                 if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || isExactMessage('හායි') || isExactMessage('hello')) {
                     await reply('Hi! 👋' + FOOTER);
-                } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නෙ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
+                } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නේ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
                     await reply('Mokuth Na innwa😊' + FOOTER);
-                } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මොර්නින්ග්')) {
-                    await reply('Good Morning🌤️' + FOOTER);
+                } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මෝනින්')) {
+                    await reply('Good Morning🌝' + FOOTER);
                 } else if (hasExactWord('gn') || isExactMessage('good night') || isExactMessage('ගුඩ් නයිට්')) {
                     await reply('Good Night✨' + FOOTER);
                 } else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || isExactMessage('good bye')) {
                     await reply('Bye🍻' + FOOTER);
                 } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
-                    await reply(`*🔥 R2K Gaming Channels 🔥*
+                    await reply(`*🔦 R2K Gaming Channels 🔦*
 
 💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
 💓Youtube - https://www.youtube.com/@rush.2.kill__0
@@ -850,29 +963,29 @@ ${messageText}
 
 *\`Thankyou Yaluwe !\`*` + FOOTER);
                 } else if (textLower.includes('payment') || textLower.includes('bank details')) {
-                    await reply(`*💰Payment Details*
+                    await reply(`*💸Payment Details*
 
-💡Bank - Commercial Bank
+💢Bank - Commercial Bank
 Account number - 8029210301
 Name - G.M.Nethmintha Nimsara Jayasooriya
 Branch - Ampara
 
-💡Bank - Lolc Bank
+💢Bank - Lolc Bank
 Account number - 03210014631
 Name - G.M.Nethmintha Nimsara
 Branch - Ampara1
 
-💡Bank - NSB
+💢Bank - NSB
 Account number - 109090193739
 Name - G.M.N.N.JAYASURIYA
 Branch - Ampara 2nd
 
-💡Bank - Dialog Finance PLC
+💢Bank - Dialog Finance PLC
 Account number -  001021434294
 Name - Gardiya Manawaduge Nethmintha Nimsara Jayasooriya
 Branch - Head Office
 
-💡Bank - Peoples Bank
+💢Bank - Peoples Bank
 Account number - 015200130082418
 Name - Nethmintha nimsara
 Branch - branch Ampara - 015
@@ -882,7 +995,7 @@ Branch - branch Ampara - 015
 
 0740532742
 
-*Ez Cash දාද්දි වැඩියෙන් rs.20 දාන්න*
+*Ez Cash පැයට එකකට rs.20 ගානේ*
 
 *🪙 BINANCE*
 
@@ -896,13 +1009,13 @@ id - 842717887
                         const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
                         const audioBuffer = Buffer.from(response.data);
                         await reply({
-                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎' + FOOTER,
+                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER,
                             audio: audioBuffer,
                             mimetype: 'audio/mp4',
                             ptt: true
                         });
                     } catch (err) {
-                        await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻😎' + FOOTER);
+                        await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER);
                     }
                 }
             }
@@ -929,7 +1042,7 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // 🔥 .vvpowner - Set owner number for .vvp
+                // 🔑 .vvpowner - Set owner number for .vvp
                 // ==========================================
                 case 'vvpowner':
                 case 'setvvpowner':
@@ -972,7 +1085,7 @@ id - 842717887
                 }
 
                 // ==========================================
-                // 🔥 .pair - Generate pairing code from bot
+                // 🔑 .pair - Generate pairing code from bot
                 // ==========================================
                 case 'pair':
                 case 'paircode': {
@@ -1064,7 +1177,7 @@ id - 842717887
                         const allSessions = await Session.find({});
                         const active = Array.from(activeSockets.keys());
                         
-                        let activeText = `🔥 *ACTIVE USERS*\n\n`;
+                        let activeText = `🔦 *ACTIVE USERS*\n\n`;
                         activeText += `📊 *Total Connected:* ${active.length}\n`;
                         activeText += `💾 *Total Sessions:* ${allSessions.length}\n\n`;
                         
@@ -1187,7 +1300,7 @@ id - 842717887
                     const senderName = senderJid.split('@')[0];
                     const minsAgo = Math.floor((Date.now() - lastDeleted.timestamp) / 60000);
 
-                    const recoverText = `╭─❖ *🗑️ DELETED MESSAGE RECOVERED* ❖─╮
+                    const recoverText = `╭─⏖ *🗑️ DELETED MESSAGE RECOVERED* ⏖─╮
 │
 │ 👤 *Sender:* @${senderName}
 │ ⏰ *Time:* ${lastDeleted.time}
@@ -1195,7 +1308,7 @@ id - 842717887
 │ 💬 *Message:*
 │ ${lastDeleted.text}
 │
-╰─────────────────────────❖` + FOOTER;
+╰──────────────────────⏖` + FOOTER;
 
                     await reply({
                         text: recoverText.trim(),
@@ -1214,7 +1327,7 @@ id - 842717887
 
 💬 *Chat JID:* \`${chatJid}\`
 👤 *Sender JID:* \`${senderJid}\`
-🎯 *Quoted JID:* \`${quotedJid}\`` + FOOTER);
+💭 *Quoted JID:* \`${quotedJid}\`` + FOOTER);
                     break;
                 }
 
@@ -1224,7 +1337,7 @@ id - 842717887
                     const query = args.join(' ');
                     if (!query) return reply(`⚠️ Please provide a question!` + FOOTER);
 
-                    await reply(`🤖 Thinking... 🧠` + FOOTER);
+                    await reply(`🤖 Thinking... 🤔` + FOOTER);
                     
                     const aiAnswer = await askAI(query);
 
@@ -1297,7 +1410,7 @@ id - 842717887
                 }
 
                 // ==========================================
-                // 🔥 TIKTOK - UPDATED with Zanta API
+                // 🔑 TIKTOK - UPDATED with Zanta API
                 // ==========================================
                 case 'tt':
                 case 'tiktok': {
@@ -1501,7 +1614,9 @@ id - 842717887
                     break;
                 }
 
-                // Sticker
+                // ==========================================
+                // 🔧 FIXED: STICKER COMMAND
+                // ==========================================
                 case 'sticker':
                 case 's': {
                     try {
@@ -1510,30 +1625,60 @@ id - 842717887
                             return reply(`⚠️ Reply to image/video with .sticker` + FOOTER);
                         }
                         
+                        // Unwrap quoted message
                         let qMsg = quoted.quotedMessage;
-                        if (qMsg.ephemeralMessage) qMsg = qMsg.ephemeralMessage.message;
-                        if (qMsg.viewOnceMessage) qMsg = qMsg.viewOnceMessage.message;
+                        qMsg = unwrapMessage(qMsg);
                         
-                        const messageType = Object.keys(qMsg)[0];
-                        
-                        if (!['imageMessage', 'videoMessage'].includes(messageType)) {
-                            return reply(`⚠️ Reply to image/video!` + FOOTER);
+                        if (!qMsg) {
+                            return reply(`⚠️ Could not read quoted message!` + FOOTER);
                         }
+                        
+                        // Get media type
+                        const mediaInfo = getMediaType(qMsg);
+                        
+                        if (!mediaInfo) {
+                            return reply(`⚠️ Reply to image/video only!` + FOOTER);
+                        }
+                        
+                        const { type: messageType, data: mediaData } = mediaInfo;
+                        const isVideo = messageType === 'videoMessage';
                         
                         await reply(`⏳ Creating sticker...` + FOOTER);
                         
+                        // Build proper download message
                         const downloadMsg = {
-                            key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
-                            message: { [messageType]: qMsg[messageType] }
+                            key: { 
+                                remoteJid: quoted.remoteJid || sender, 
+                                id: quoted.stanzaId, 
+                                participant: quoted.participant 
+                            },
+                            message: { [messageType]: mediaData }
                         };
                         
-                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        // Download media buffer
+                        const buffer = await downloadMediaMessage(
+                            downloadMsg, 
+                            'buffer', 
+                            {}, 
+                            { logger: pino({ level: 'silent' }) }
+                        );
                         
+                        if (!buffer || buffer.length === 0) {
+                            return reply(`❌ Failed to download media!` + FOOTER);
+                        }
+                        
+                        // Convert to sticker
+                        const stickerBuffer = await convertToSticker(buffer, isVideo);
+                        
+                        // Send sticker
                         await socket.sendMessage(sender, {
-                            sticker: buffer
+                            sticker: stickerBuffer
                         }, { quoted: msg });
                         
+                        console.log(`[STICKER] ✅ Sent (${isVideo ? 'video' : 'image'}) - ${stickerBuffer.length} bytes`);
+                        
                     } catch (e) {
+                        console.error('[STICKER] Error:', e);
                         await reply(`❌ Sticker failed: ${e.message}` + FOOTER);
                     }
                     break;
@@ -1571,7 +1716,7 @@ id - 842717887
                         const current = data.current_condition[0];
                         const area = data.nearest_area[0];
                         
-                        await reply(`🌤️ *WEATHER REPORT*
+                        await reply(`🌍 *WEATHER REPORT*
 
 📍 *City:* ${area.areaName[0].value}
 🌍 *Country:* ${area.country[0].value}
@@ -1748,11 +1893,25 @@ id - 842717887
                     break;
                 }
 
-                // GETCONTACT
+                // ==========================================
+                // 🔧 FIXED: GETCONTACT - Rate Limit Protection
+                // ==========================================
                 case 'getcontact':
                 case 'gc': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
+                    
+                    // 🛡️ CHECK IF ALREADY RUNNING
+                    const lockKey = number;
+                    const existingLock = getContactLocks.get(lockKey);
+                    if (existingLock?.running) {
+                        return reply(`⏳ *GetContact already running!*
+
+📊 *Progress:* ${existingLock.sent} sent
+⏱️ *Started:* ${Math.floor((Date.now() - existingLock.startTime) / 1000)}s ago
+
+💡 Please wait for it to finish!` + FOOTER);
+                    }
                     
                     try {
                         const meta = await socket.groupMetadata(sender);
@@ -1766,27 +1925,59 @@ id - 842717887
                             return reply(`❌ No members to message!` + FOOTER);
                         }
                         
-                        const estTime = Math.ceil(members.length * 6.5 / 60);
+                        // 🛡️ LIMIT: Max 50 members per run (ban protection)
+                        const MAX_SAFE = 50;
+                        const targetMembers = members.slice(0, MAX_SAFE);
+                        const skipped = members.length - targetMembers.length;
                         
-                        await reply(`📞 *STARTING GETCONTACT*
-
-📊 *Total Members:* ${members.length}
-⏱️ *Est. Time:* ~${estTime} min
-🔄 *Sending messages...*
-
-💡 *Tips:*
-• Each message has random delay
-• Channel forwarded to all
-• Bot detection bypass enabled
-• You'll get a report when done!` + FOOTER);
+                        // 🛡️ Calculate safe time (min 10s per message)
+                        const estTime = Math.ceil(targetMembers.length * 10 / 60);
                         
-                        const messages = ['Hi 👋', 'Hello 👋', 'Mk 😊'];
+                        await reply(`📱 *STARTING GETCONTACT (SAFE MODE)*
+
+📊 *Members Found:* ${members.length}
+🎯 *Will Message:* ${targetMembers.length}
+${skipped > 0 ? `⚠️ *Skipped (safe limit):* ${skipped}\n` : ''}⏱️ *Est. Time:* ~${estTime} min
+🛡️ *Ban Protection:* ENABLED
+
+💡 *Safety Features:*
+• Random 10-15s delays
+• 60s break every 5 msgs
+• Max ${MAX_SAFE} messages per run
+• Rate limit detection
+
+⚠️ *Do NOT run other bulk commands!*` + FOOTER);
+                        
+                        // Set lock
+                        getContactLocks.set(lockKey, {
+                            running: true,
+                            sent: 0,
+                            startTime: Date.now()
+                        });
+                        
+                        // Safe message variations
+                        const messages = [
+                            'Hi 👋',
+                            'Hello 👋',
+                            'Mk 😊',
+                            'Hey there!',
+                            'Good day!',
+                            'Hi! How are you?'
+                        ];
+                        
                         let sent = 0;
                         let failed = 0;
+                        let rateLimited = false;
                         
-                        for (let i = 0; i < members.length; i++) {
-                            const memberJid = members[i];
+                        for (let i = 0; i < targetMembers.length; i++) {
+                            const memberJid = targetMembers[i];
                             if (memberJid === botJid) continue;
+                            
+                            // Check if rate limited - stop early
+                            if (rateLimited) {
+                                console.log(`[GETCONTACT] ⛔ Stopped early due to rate limit`);
+                                break;
+                            }
                             
                             try {
                                 const randomMsg = messages[Math.floor(Math.random() * messages.length)];
@@ -1797,41 +1988,69 @@ id - 842717887
                                 });
                                 
                                 sent++;
-                                console.log(`[GETCONTACT] ✅ ${sent}/${members.length} - Sent to ${memberJid}`);
+                                const lock = getContactLocks.get(lockKey);
+                                if (lock) lock.sent = sent;
                                 
-                                const randomDelay = Math.floor(Math.random() * 5000) + 5000;
+                                console.log(`[GETCONTACT] ✅ ${sent}/${targetMembers.length} - ${memberJid}`);
+                                
+                                // 🛡️ SAFE DELAY: 10-15 seconds between messages
+                                const randomDelay = Math.floor(Math.random() * 5000) + 10000;
                                 await delay(randomDelay);
                                 
-                                if (sent % 5 === 0) {
-                                    console.log(`[GETCONTACT] Taking a 30s break after ${sent} messages`);
-                                    await delay(30000);
+                                // 🛡️ BREAK: 60s break every 5 messages
+                                if (sent % 5 === 0 && sent < targetMembers.length) {
+                                    console.log(`[GETCONTACT] ☕ Taking 60s break after ${sent} messages`);
+                                    await delay(60000);
                                 }
                                 
                             } catch (err) {
                                 failed++;
-                                console.log(`[GETCONTACT] ❌ Failed for ${memberJid}: ${err.message}`);
+                                const errMsg = (err.message || '').toLowerCase();
+                                console.log(`[GETCONTACT] ❌ Failed ${memberJid}: ${err.message}`);
                                 
-                                if (err.message?.toLowerCase().includes('rate') || 
-                                    err.message?.toLowerCase().includes('limit') ||
-                                    err.message?.toLowerCase().includes('too many')) {
-                                    console.log('[GETCONTACT] Rate limit detected! Waiting 2 minutes...');
-                                    await delay(120000);
-                                } else {
-                                    await delay(8000);
+                                // 🛡️ RATE LIMIT DETECTION
+                                if (errMsg.includes('rate') || 
+                                    errMsg.includes('limit') ||
+                                    errMsg.includes('too many') ||
+                                    errMsg.includes('spam') ||
+                                    errMsg.includes('block')) {
+                                    
+                                    console.log('[GETCONTACT] 🚨 RATE LIMIT DETECTED! Stopping...');
+                                    rateLimited = true;
+                                    break;
                                 }
+                                
+                                // Longer delay on error
+                                await delay(15000);
                             }
                         }
                         
-                        await reply(`✅ *GETCONTACT COMPLETE!*
+                        // Clear lock
+                        getContactLocks.delete(lockKey);
+                        
+                        const finalMsg = rateLimited 
+                            ? `⚠️ *GETCONTACT STOPPED (Rate Limit)*
 
 📊 *Results:*
 ✅ *Sent:* ${sent}
 ❌ *Failed:* ${failed}
-📱 *Total:* ${members.length}
+📱 *Total:* ${targetMembers.length}
 
-💡 *Note:* Some users may not receive messages due to privacy settings.` + FOOTER);
+🚨 *WhatsApp rate limit detected!*
+💡 *Wait 24 hours before trying again!*`
+                            : `✅ *GETCONTACT COMPLETE!*
+
+📊 *Results:*
+✅ *Sent:* ${sent}
+❌ *Failed:* ${failed}
+📱 *Total:* ${targetMembers.length}
+${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
+💡 *Note:* Some users may not receive messages due to privacy settings.`;
+                        
+                        await reply(finalMsg + FOOTER);
                         
                     } catch (e) {
+                        getContactLocks.delete(lockKey);
                         console.error('[GETCONTACT] Error:', e);
                         await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
@@ -1922,7 +2141,7 @@ id - 842717887
 
 📝 *Name:* ${meta.subject}
 🆔 *JID:* \`${meta.id}\`
-👥 *Members:* ${meta.participants.length}
+👑 *Members:* ${meta.participants.length}
 👑 *Admins:* ${admins.length}
 📅 *Created:* ${new Date(meta.creation * 1000).toLocaleDateString()}
 📝 *Desc:* ${meta.desc || 'No description'}` + FOOTER;
@@ -1994,9 +2213,9 @@ id - 842717887
                 // SINHALA JOKE
                 case 'sijoke': {
                     const sijokes = [
-                        "මිනිහෙක් බස් එකේ ගිහින් කොන්දොස්තරට කිව්වා 'ටිකට් එකක් දෙන්න' කියලා. කොන්දොස්තර කිව්වා 'කොහෙද යන්නේ?' මිනිහා කිව්වා 'ඔයාගේ ගෙදර' කියලා 😂",
-                        "ගුරුවරයා: 'උඹ මොකද මේ පන්තියට එන්නේ නැත්තේ?' ළමයා: 'සර් මම එනවා, ඒත් ගෙදර මාව නවත්තනවා' 😅",
-                        "එක මිනිහෙක් ඩොක්ටර්ට කිව්වා 'මට කන්න බෑ' කියලා. ඩොක්ටර් කිව්වා 'මොකද?' මිනිහා කිව්වා 'කට ඇරියම කන්න පුළුවන්' කියලා 🤣"
+                        "මිනිහෙක් දුවලා ගිහින් කිව්වලු 'ඔයාට බත් දෙන්න' කියලා. ගිහින් කිව්වා 'කොහොමද මේ?' මිනිහා කිව්වා 'වහලේ ගහන්න' කියලා 😂",
+                        "ගුරුවරයා: 'ඔය මොකද මේ පන්තියේ නිදාගන්නේ?' ළමයා: 'සර් මම සිහිනෙන් ඉගෙන ගන්නවා' 😅",
+                        "එක මිනිහෙක් දොස්තරට කිව්වා 'මට කන්න බෑ' කියලා. දොස්තර කිව්වා 'මොකද?' මිනිහා කිව්වා 'කට ඇරියම කෑම එලියට වැටෙනවා' 🤣"
                     ];
                     
                     await reply(`😂 *සිංහල ජෝක්*\n\n${sijokes[Math.floor(Math.random() * sijokes.length)]}` + FOOTER);
@@ -2520,60 +2739,59 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                         return reply(`⚠️ Reply to View Once media with *${prefix}vvp*` + FOOTER);
                     }
 
-                    let qMsg = quoted.quotedMessage;
-                    if (qMsg.ephemeralMessage) qMsg = qMsg.ephemeralMessage.message;
-                    if (qMsg.viewOnceMessage) qMsg = qMsg.viewOnceMessage.message;
-                    if (qMsg.viewOnceMessageV2) qMsg = qMsg.viewOnceMessageV2.message;
-                    if (qMsg.viewOnceMessageV2Extension) qMsg = qMsg.viewOnceMessageV2Extension.message;
+                    let qMsg = unwrapMessage(quoted.quotedMessage);
+                    if (!qMsg) {
+                        return reply(`⚠️ Could not read quoted message!` + FOOTER);
+                    }
 
-                    const messageType = Object.keys(qMsg)[0];
+                    const mediaInfo = getMediaType(qMsg);
+                    if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) {
+                        return reply(`⚠️ Reply to View Once media!` + FOOTER);
+                    }
 
-                    if (['imageMessage', 'videoMessage'].includes(messageType)) {
-                        const downloadMsg = {
-                            key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
-                            message: { [messageType]: qMsg[messageType] }
-                        };
+                    const { type: messageType, data: mediaData } = mediaInfo;
+                    const downloadMsg = {
+                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
+                        message: { [messageType]: mediaData }
+                    };
 
-                        try {
-                            await reply(`⏳ Sending to owner privately...` + FOOTER);
-                            
-                            const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                            const innerMsg = qMsg[messageType];
-                            
-                            const ownerNumber = await getOwnerNumber(number);
-                            const senderName = (msg.key.participant || sender).split('@')[0];
-                            const ownerJid = `${ownerNumber}@s.whatsapp.net`;
-                            
-                            const caption = `📥 *VIEW ONCE RECEIVED*
+                    try {
+                        await reply(`⏳ Sending to owner privately...` + FOOTER);
+                        
+                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        const innerMsg = mediaData;
+                        
+                        const ownerNumber = await getOwnerNumber(number);
+                        const senderName = (msg.key.participant || sender).split('@')[0];
+                        const ownerJid = `${ownerNumber}@s.whatsapp.net`;
+                        
+                        const caption = `📥 *VIEW ONCE RECEIVED*
 
 👤 *From:* @${senderName}
 📍 *Chat:* ${sender.includes('@g.us') ? 'Group' : 'Inbox'}
-📅 *Time:* ${new Date().toLocaleString()}
+🕐 *Time:* ${new Date().toLocaleString()}
 💬 *Caption:* ${innerMsg?.caption || 'No caption'}` + FOOTER;
 
-                            if (messageType === 'imageMessage') {
-                                await socket.sendMessage(ownerJid, {
-                                    image: buffer,
-                                    caption: caption,
-                                    mentions: [msg.key.participant || sender],
-                                    contextInfo: channelInfo
-                                });
-                            } else if (messageType === 'videoMessage') {
-                                await socket.sendMessage(ownerJid, {
-                                    video: buffer,
-                                    caption: caption,
-                                    mentions: [msg.key.participant || sender],
-                                    contextInfo: channelInfo
-                                });
-                            }
-                            
-                            await reply(`✅ *Sent to Owner (+${ownerNumber}) privately!*` + FOOTER);
-                            
-                        } catch (err) {
-                            await reply(`❌ Failed: ${err.message}` + FOOTER);
+                        if (messageType === 'imageMessage') {
+                            await socket.sendMessage(ownerJid, {
+                                image: buffer,
+                                caption: caption,
+                                mentions: [msg.key.participant || sender],
+                                contextInfo: channelInfo
+                            });
+                        } else if (messageType === 'videoMessage') {
+                            await socket.sendMessage(ownerJid, {
+                                video: buffer,
+                                caption: caption,
+                                mentions: [msg.key.participant || sender],
+                                contextInfo: channelInfo
+                            });
                         }
-                    } else {
-                        await reply(`⚠️ Reply to View Once media!` + FOOTER);
+                        
+                        await reply(`✅ *Sent to Owner (+${ownerNumber}) privately!*` + FOOTER);
+                        
+                    } catch (err) {
+                        await reply(`❌ Failed: ${err.message}` + FOOTER);
                     }
                     break;
                 }
@@ -2586,35 +2804,33 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                         return reply(`⚠️ Reply to View Once media with *${prefix}vv*` + FOOTER);
                     }
 
-                    let qMsg = quoted.quotedMessage;
-                    if (qMsg.ephemeralMessage) qMsg = qMsg.ephemeralMessage.message;
-                    if (qMsg.viewOnceMessage) qMsg = qMsg.viewOnceMessage.message;
-                    if (qMsg.viewOnceMessageV2) qMsg = qMsg.viewOnceMessageV2.message;
-                    if (qMsg.viewOnceMessageV2Extension) qMsg = qMsg.viewOnceMessageV2Extension.message;
+                    let qMsg = unwrapMessage(quoted.quotedMessage);
+                    if (!qMsg) {
+                        return reply(`⚠️ Could not read quoted message!` + FOOTER);
+                    }
 
-                    const messageType = Object.keys(qMsg)[0];
+                    const mediaInfo = getMediaType(qMsg);
+                    if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) {
+                        return reply(`⚠️ Reply to View Once media!` + FOOTER);
+                    }
 
-                    if (['imageMessage', 'videoMessage'].includes(messageType)) {
-                        const downloadMsg = {
-                            key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
-                            message: { [messageType]: qMsg[messageType] }
-                        };
+                    const { type: messageType, data: mediaData } = mediaInfo;
+                    const downloadMsg = {
+                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
+                        message: { [messageType]: mediaData }
+                    };
 
-                        try {
-                            const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                            const innerMsg = qMsg[messageType];
-                            const caption = `📥 *View Once Media*\n\n${innerMsg?.caption || ''}` + FOOTER;
+                    try {
+                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        const caption = `📥 *View Once Media*\n\n${mediaData?.caption || ''}` + FOOTER;
 
-                            if (messageType === 'imageMessage') {
-                                await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                            } else if (messageType === 'videoMessage') {
-                                await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                            }
-                        } catch (err) {
-                            await reply(`❌ Failed: ${err.message}` + FOOTER);
+                        if (messageType === 'imageMessage') {
+                            await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
+                        } else if (messageType === 'videoMessage') {
+                            await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
                         }
-                    } else {
-                        await reply(`⚠️ Reply to View Once media!` + FOOTER);
+                    } catch (err) {
+                        await reply(`❌ Failed: ${err.message}` + FOOTER);
                     }
                     break;
                 }
@@ -2628,10 +2844,10 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const followStatus = isFollowing ? '✅ Followed' : '❌ Not Followed';
 
                     const captionText = `
-*👋 ${botName.toUpperCase()} 🧛🏻*
+*👋 ${botName.toUpperCase()} 🧃🇱🇰*
 *-- The Mini Whatsapp Bot Experience --*
 
-> Created By Nimsara 🧛🏻
+> Created By Nimsara 🧃🇱🇰
 > 🪀 Contact - 0784280074
 
 ─────────────────────
@@ -2642,22 +2858,22 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 > Bot Creator : NIMSARA
 ─────────────────────
 
-*╭─\`💠 𝗕𝗢𝗧 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┈⊷*
-*╎*
-*╎ 1️⃣ - 📥 DOWNLOAD COMMANDS*
-*╎ 2️⃣ - ⚙️ SETTINGS COMMANDS*
-*╎ 3️⃣ - 👑 OWNER COMMANDS*
-*╎ 4️⃣ - 🛠️ UTILITY COMMANDS*
-*╎ 5️⃣ - 🤖 AI & CONVERT*
-*╎ 6️⃣ - 👥 GROUP ADMIN*
-*╎ 7️⃣ - 🎮 FUN COMMANDS*
-*╎*
-*╰───────────────────────*
+*╭─\`🎈 𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┤⭓*
+*┃*
+*┃ 1️⃣ - 📥 DOWNLOAD COMMANDS*
+*┃ 2️⃣ - ⚙️ SETTINGS COMMANDS*
+*┃ 3️⃣ - 👑 OWNER COMMANDS*
+*┃ 4️⃣ - 🛠️ UTILITY COMMANDS*
+*┃ 5️⃣ - 🤖 AI & CONVERT*
+*┃ 6️⃣ - 👑 GROUP ADMIN*
+*┃ 7️⃣ - 🎮 FUN COMMANDS*
+*┃*
+*╰──────────────────────*
 
 💡 *Reply to this message with a number!*
 
 🔗 Web: https://nimsara-official.vercel.app/
-*🏮 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
+*📢 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
 
 > _MADE BY NIMSARA_`;
 
@@ -2716,7 +2932,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validOptions = ['all', 'cmd', 'off'];
                     if (!validOptions.includes(option)) {
-                        return reply(`👀 *Auto-Read*\n\nCurrent: *${(global.autoReadStatus || 'off').toUpperCase()}*\n\nOptions:\n• .autoread all\n• .autoread cmd\n• .autoread off` + FOOTER);
+                        return reply(`👁️ *Auto-Read*\n\nCurrent: *${(global.autoReadStatus || 'off').toUpperCase()}*\n\nOptions:\n• .autoread all\n• .autoread cmd\n• .autoread off` + FOOTER);
                     }
                     global.autoReadStatus = option;
                     await reply(`✅ Auto-Read: *${global.autoReadStatus.toUpperCase()}*` + FOOTER);
@@ -2786,32 +3002,40 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     if (!quoted || !quoted.quotedMessage) {
                         return reply(`⚠️ Reply to media!` + FOOTER);
                     }
-                    const quotedMsg = {
+                    
+                    let qMsg = unwrapMessage(quoted.quotedMessage);
+                    if (!qMsg) {
+                        return reply(`⚠️ Could not read quoted message!` + FOOTER);
+                    }
+                    
+                    const mediaInfo = getMediaType(qMsg);
+                    if (!mediaInfo) {
+                        return reply(`⚠️ Reply to media!` + FOOTER);
+                    }
+                    
+                    const { type: messageType, data: mediaData } = mediaInfo;
+                    
+                    if (!['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(messageType)) {
+                        return reply(`⚠️ Reply to image/video/audio/document!` + FOOTER);
+                    }
+                    
+                    const downloadMsg = {
                         key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
-                        message: quoted.quotedMessage
+                        message: { [messageType]: mediaData }
                     };
+                    
                     try {
-                        let messageType = Object.keys(quoted.quotedMessage)[0];
-                        if (messageType === 'ephemeralMessage') {
-                            messageType = Object.keys(quoted.quotedMessage.ephemeralMessage.message)[0];
-                            quotedMsg.message = quoted.quotedMessage.ephemeralMessage.message;
-                        }
-                        if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(messageType)) {
-                            const buffer = await downloadMediaMessage(quotedMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                            const innerMsg = quotedMsg.message[messageType];
-                            const caption = `${innerMsg?.caption || ''}` + FOOTER;
-                            if (messageType === 'imageMessage') {
-                                await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                            } else if (messageType === 'videoMessage') {
-                                await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                            } else if (messageType === 'audioMessage') {
-                                await socket.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', ptt: innerMsg?.ptt || false, contextInfo: channelInfo }, { quoted: msg });
-                            } else if (messageType === 'documentMessage') {
-                                await socket.sendMessage(sender, { document: buffer, mimetype: innerMsg?.mimetype, fileName: innerMsg?.fileName, contextInfo: channelInfo }, { quoted: msg });
-                            }
-                        } else if (messageType === 'conversation' || messageType === 'extendedTextMessage') {
-                            const text = quoted.quotedMessage.conversation || quoted.quotedMessage.extendedTextMessage?.text;
-                            await reply(`📥 *Saved:*\n\n${text}` + FOOTER);
+                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        const caption = `${mediaData?.caption || ''}` + FOOTER;
+                        
+                        if (messageType === 'imageMessage') {
+                            await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
+                        } else if (messageType === 'videoMessage') {
+                            await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
+                        } else if (messageType === 'audioMessage') {
+                            await socket.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', ptt: mediaData?.ptt || false, contextInfo: channelInfo }, { quoted: msg });
+                        } else if (messageType === 'documentMessage') {
+                            await socket.sendMessage(sender, { document: buffer, mimetype: mediaData?.mimetype, fileName: mediaData?.fileName, contextInfo: channelInfo }, { quoted: msg });
                         }
                     } catch (err) {
                         await reply(`❌ Failed: ${err.message}` + FOOTER);
@@ -3004,7 +3228,7 @@ function setupStatusAndPresenceHandlers(socket, number) {
                 const autoLike = await get('AUTO_LIKE_STATUS', botNum);
                 if (autoLike === 'true' || autoLike === 'on') {
                     try {
-                        const emojis = ['❤️', '🔥', '👍', '✨', '🤍', '🌟'];
+                        const emojis = ['❤️', '🔦', '👌', '✨', '🤍', '🌝'];
                         const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
                         await socket.sendMessage('status@broadcast', {
                             react: { text: randomEmoji, key: msg.key }
@@ -3021,11 +3245,11 @@ function setupStatusAndPresenceHandlers(socket, number) {
 // ==========================================
 async function restoreExistingSessions() {
     try {
-        console.log("🔄 Checking for existing sessions...");
+        console.log("🔍 Checking for existing sessions...");
         const allSessions = await Session.find({});
         
         if (allSessions.length === 0) {
-            console.log("ℹ️ No existing sessions found.");
+            console.log("⏹️ No existing sessions found.");
             return;
         }
 
@@ -3098,7 +3322,18 @@ async function StartBot(number, res = null, isRestore = false) {
 
                 await currentSock.sendMessage(ownJid, {
                     image: { url: BOT_IMAGE_URL },
-                    caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Your WhatsApp Bot is now online and active!\n\n• Name: *${botName}*\n• Number: *${botNumber}*\n• Prefix: *${currentPrefix}*\n\nType *${currentPrefix}menu* to view commands.\n\n🔗 Channel: ${BOT_CHANNEL_LINK}\n> Creator: *Nimsara*`,
+                    caption: `🎉 *${botName} CONNECTED* 🎉
+
+✅ Your WhatsApp Bot is now online and active!
+
+• Name: *${botName}*
+• Number: *${botNumber}*
+• Prefix: *${currentPrefix}*
+
+Type *${currentPrefix}menu* to view commands.
+
+🔗 Channel: ${BOT_CHANNEL_LINK}
+> Creator: *Nimsara*`,
                     contextInfo: getChannelContext()
                 });
 
