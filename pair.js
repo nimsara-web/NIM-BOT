@@ -56,11 +56,13 @@ const DEFAULT_OWNER_NUMBER = '94784280074';
 const NIM_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
 const ZANTA_API_BASE = 'https://api.zanta-mini.store';
 
-// 🔑 Owner Numbers (Only these can use owner commands)
-const OWNER_NUMBERS = ['94784280074', '94701726411'];
+// ==========================================
+// 🔑 OWNER SYSTEM - MAIN OWNERS (PROTECTED)
+// ==========================================
+const MAIN_OWNER_NUMBERS = ['94784280074', '94701726411'];
 
-// 🔑 Store for managing owner list (persisted in memory + DB)
-let OWNER_LIST = [...OWNER_NUMBERS];
+// 🔑 Dynamic owner list (starts with main owners, can add more via .nimcmd)
+let OWNER_LIST = [...MAIN_OWNER_NUMBERS];
 
 const FOOTER = '\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻';
 
@@ -87,11 +89,40 @@ const autoSaveSettings = new Map();
 const getContactLocks = new Map();
 
 // ==========================================
-// 🔑 Check if user is owner
+// 🔑 STRICT Owner Check
 // ==========================================
 function isOwnerNumber(number) {
+    if (!number) return false;
     const clean = number.replace(/[^0-9]/g, '');
     return OWNER_LIST.includes(clean);
+}
+
+function isMainOwnerNumber(number) {
+    if (!number) return false;
+    const clean = number.replace(/[^0-9]/g, '');
+    return MAIN_OWNER_NUMBERS.includes(clean);
+}
+
+// ==========================================
+// 🔑 Load Owner List from DB
+// ==========================================
+async function loadOwnerList(botNumber) {
+    try {
+        const savedList = await get('OWNER_LIST', botNumber);
+        if (savedList) {
+            const parsed = JSON.parse(savedList);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                const merged = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
+                OWNER_LIST = merged;
+                console.log(`✅ Owner list loaded: ${OWNER_LIST.join(', ')}`);
+                return;
+            }
+        }
+        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
+    } catch (e) {
+        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
+        console.log('⚠️ Could not load owner list, using defaults');
+    }
 }
 
 // ==========================================
@@ -209,6 +240,7 @@ async function sendWithTyping(sock, jid, message, options = {}) {
 
 // ==========================================
 // 🔧 FIXED: Phone-Compatible Sticker Conversion
+// (Fixed: proper WebP metadata, correct dimensions, alpha handling)
 // ==========================================
 async function convertToSticker(buffer, isVideo = false) {
     try {
@@ -217,54 +249,106 @@ async function convertToSticker(buffer, isVideo = false) {
             return buffer;
         }
 
-        // Get image metadata
-        const metadata = await sharp(buffer, { animated: isVideo }).metadata();
-        
+        // First, get metadata to understand the input
+        const meta = await sharp(buffer, { animated: !!isVideo }).metadata();
+        console.log(`[STICKER] Input: ${meta.width}x${meta.height}, format: ${meta.format}, animated: ${!!isVideo}`);
+
         if (isVideo) {
-            // For video/GIF → animated webp sticker
-            // WhatsApp animated stickers need specific settings
-            const result = await sharp(buffer, {
-                animated: true,
-                limitInputPixels: false
-            })
-                .resize(512, 512, {
-                    fit: 'contain',
-                    background: { r: 0, g: 0, b: 0, alpha: 0 }
+            // ==========================================
+            // ANIMATED STICKER (Video/GIF → Animated WebP)
+            // ==========================================
+            try {
+                const result = await sharp(buffer, {
+                    animated: true,
+                    limitInputPixels: false,
+                    pages: -1
                 })
-                .webp({
-                    quality: 60,
-                    effort: 3,
-                    loop: 0,
-                    delay: 100,
-                    force: true
+                    .resize(512, 512, {
+                        fit: 'contain',
+                        background: { r: 0, g: 0, b: 0, alpha: 0 }
+                    })
+                    .webp({
+                        quality: 55,
+                        effort: 4,
+                        loop: 0,
+                        delay: 100,
+                        lossless: false,
+                        nearLossless: false
+                    })
+                    .toBuffer();
+                
+                // Verify it's a valid WebP with RIFF header
+                if (result && result.length > 100 && 
+                    result[0] === 0x52 && result[1] === 0x49 && 
+                    result[2] === 0x46 && result[3] === 0x46) {
+                    console.log(`[STICKER] ✅ Animated WebP: ${result.length} bytes`);
+                    return result;
+                }
+            } catch (animErr) {
+                console.log('[STICKER] Animated failed, trying first frame:', animErr.message);
+            }
+
+            // Fallback: extract first frame as static sticker
+            try {
+                const result = await sharp(buffer, { 
+                    animated: false, 
+                    page: 0,
+                    limitInputPixels: false 
                 })
-                .toBuffer();
-            
-            console.log(`[STICKER] Animated WebP created: ${result.length} bytes`);
-            return result;
+                    .resize(512, 512, {
+                        fit: 'contain',
+                        background: { r: 0, g: 0, b: 0, alpha: 0 }
+                    })
+                    .ensureAlpha()
+                    .webp({
+                        quality: 75,
+                        effort: 4,
+                        lossless: false
+                    })
+                    .toBuffer();
+                
+                console.log(`[STICKER] ✅ Static fallback: ${result.length} bytes`);
+                return result;
+            } catch (staticErr) {
+                console.log('[STICKER] Static fallback failed:', staticErr.message);
+                return buffer;
+            }
         } else {
-            // For static image → static webp sticker
-            // Ensure it has alpha channel (transparency)
+            // ==========================================
+            // STATIC STICKER (Image → Static WebP)
+            // ==========================================
             const result = await sharp(buffer, {
-                limitInputPixels: false
+                limitInputPixels: false,
+                failOnError: false
             })
+                .rotate() // Auto-rotate based on EXIF
                 .resize(512, 512, {
                     fit: 'contain',
-                    background: { r: 0, g: 0, b: 0, alpha: 0 }
+                    background: { r: 0, g: 0, b: 0, alpha: 0 },
+                    withoutEnlargement: false
                 })
-                .ensureAlpha()
+                .ensureAlpha() // Force RGBA (required for WhatsApp stickers)
                 .webp({
                     quality: 80,
                     effort: 4,
-                    lossless: false
+                    lossless: false,
+                    smartSubsample: true
                 })
                 .toBuffer();
             
-            console.log(`[STICKER] Static WebP created: ${result.length} bytes`);
-            return result;
+            // Verify RIFF/WEBP header
+            if (result && result.length > 100 && 
+                result[0] === 0x52 && result[1] === 0x49 && 
+                result[2] === 0x46 && result[3] === 0x46) {
+                console.log(`[STICKER] ✅ Static WebP: ${result.length} bytes`);
+                return result;
+            } else {
+                console.log('[STICKER] ⚠️ Invalid WebP header, returning raw');
+                return buffer;
+            }
         }
     } catch (e) {
-        console.error('Sticker conversion error:', e.message);
+        console.error('[STICKER] Conversion error:', e.message);
         return buffer;
     }
 }
@@ -313,7 +397,6 @@ async function convertTtsToOpus(mp3Buffer) {
 // 🔧 DOWNLOAD HELPERS - Zanta API
 // ==========================================
 
-// YouTube Audio Download
 async function downloadYoutubeAudio(youtubeUrl) {
     try {
         const apiUrl = `${ZANTA_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
@@ -340,7 +423,6 @@ async function downloadYoutubeAudio(youtubeUrl) {
     return null;
 }
 
-// YouTube Video Download
 async function downloadYoutubeVideo(youtubeUrl) {
     try {
         const apiUrl = `${ZANTA_API_BASE}/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
@@ -367,7 +449,6 @@ async function downloadYoutubeVideo(youtubeUrl) {
     return null;
 }
 
-// TikTok Download
 async function downloadTikTok(tiktokUrl) {
     try {
         const apiUrl = `${ZANTA_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
@@ -403,7 +484,6 @@ async function downloadTikTok(tiktokUrl) {
     return null;
 }
 
-// Facebook Download
 async function downloadFacebook(fbUrl) {
     try {
         const apiUrl = `${ZANTA_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(fbUrl)}`;
@@ -432,7 +512,6 @@ async function downloadFacebook(fbUrl) {
     return null;
 }
 
-// Instagram Download
 async function downloadInstagram(igUrl) {
     try {
         const apiUrl = `${ZANTA_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(igUrl)}`;
@@ -459,7 +538,6 @@ async function downloadInstagram(igUrl) {
     return null;
 }
 
-// Movie Download
 async function searchMovie(query) {
     try {
         const apiUrl = `${ZANTA_API_BASE}/api/movie/search?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
@@ -482,9 +560,7 @@ async function downloadMovie(movieId) {
     }
 }
 
-// AI
 async function askAI(query) {
-    // Try Zanta API first
     try {
         const apiUrl = `${ZANTA_API_BASE}/api/ai/gpt?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
         const response = await axios.get(apiUrl, { timeout: 30000 });
@@ -494,7 +570,6 @@ async function askAI(query) {
         console.log('[AI] Zanta API failed:', e.message);
     }
 
-    // Fallback APIs
     const apis = [
         { url: `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`, extract: (d) => d?.result || d?.gpt || d?.answer },
         { url: `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response },
@@ -747,9 +822,17 @@ ${messageText}
         const prefix = await get('PREFIX', number) || '.';
         const isCommand = body.startsWith(prefix);
 
-        // 🔑 Check if sender is owner
+        // ==========================================
+        // 🔑 STRICT OWNER CHECK
+        // Only MAIN_OWNER_NUMBERS or added owners get owner privileges
+        // (NOT every bot user - even if msg.key.fromMe)
+        // ==========================================
         const senderNumber = (msg.key.participant || sender).split('@')[0].split(':')[0];
-        const isOwnerUser = msg.key.fromMe || isOwnerNumber(senderNumber);
+        // isOwnerUser = true ONLY if:
+        //   1. The message sender is in OWNER_LIST, OR
+        //   2. The message is from this bot session AND the bot's own number is an owner
+        const isOwnerUser = isOwnerNumber(senderNumber) || 
+                           (msg.key.fromMe && isOwnerNumber(number));
 
         // ==========================================
         // 🔑 AUTO-SAVE Feature
@@ -768,7 +851,6 @@ ${messageText}
                     const autoSaveName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
                     const pushName = msg.pushName || senderNumber;
                     
-                    // Save contact
                     try {
                         await socket.sendMessage(sender, {
                             react: { text: '💾', key: msg.key }
@@ -869,7 +951,6 @@ ${messageText}
         if (pendingQualitySelection.has(sender)) {
             const pending = pendingQualitySelection.get(sender);
             
-            // Check if this is a reply to our quality message and it's a number
             if (body.match(/^[12]$/) && (pending.timestamp && Date.now() - pending.timestamp < 120000)) {
                 const choice = parseInt(body);
                 pendingQualitySelection.delete(sender);
@@ -1282,11 +1363,24 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // 🔑 .nimcmd - Owner Management
+                // 🔑 .nimcmd - Owner Management (MAIN OWNERS ONLY)
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    if (!isOwnerUser) return reply(`⚠️ *Access Denied!*\n\n💡 Only Bot Owner can use this command!` + FOOTER);
+                    // 🔒 STRICT: Only MAIN owners can manage owner list
+                    const senderClean = (msg.key.participant || sender).split('@')[0].split(':')[0];
+                    const isMainOwner = isMainOwnerNumber(senderClean) || 
+                                       (msg.key.fromMe && isMainOwnerNumber(number));
+                    
+                    if (!isMainOwner) {
+                        return reply(`⚠️ *Access Denied!*
+
+💡 Only MAIN bot owners can use this command!
+
+🔒 *Main Owners:*
+• +94784280074
+• +94701726411` + FOOTER);
+                    }
                     
                     const action = args[0]?.toLowerCase();
                     
@@ -1294,7 +1388,8 @@ id - 842717887
                         let ownerListText = `👑 *NIM OWNER MANAGEMENT*\n\n`;
                         ownerListText += `📊 *Current Owner Numbers:*\n\n`;
                         OWNER_LIST.forEach((num, i) => {
-                            ownerListText += `${i+1}. +${num}\n`;
+                            const isMain = MAIN_OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
+                            ownerListText += `${i+1}. +${num}${isMain}\n`;
                         });
                         ownerListText += `\n*Commands:*\n`;
                         ownerListText += `• .nimcmd add [number]\n`;
@@ -1303,7 +1398,7 @@ id - 842717887
                         ownerListText += `• .nimcmd setname [name]\n`;
                         ownerListText += `• .nimcmd setlogo [url]\n`;
                         ownerListText += `• .nimcmd reset\n`;
-                        ownerListText += `\n💡 Only owner numbers can add/remove!`;
+                        ownerListText += `\n🔒 = Protected main owner`;
                         return reply(ownerListText + FOOTER);
                     }
                     
@@ -1319,7 +1414,6 @@ id - 842717887
                         
                         OWNER_LIST.push(newNum);
                         
-                        // Save to DB
                         try {
                             await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
                         } catch (e) {}
@@ -1336,9 +1430,15 @@ id - 842717887
                             return reply(`⚠️ Usage: .nimcmd remove [number]` + FOOTER);
                         }
                         
-                        // Protect main owner numbers
-                        if (OWNER_NUMBERS.includes(remNum)) {
-                            return reply(`⚠️ *Cannot remove main owner!*\n\n💡 This is a protected number.` + FOOTER);
+                        // 🔒 Protect MAIN owner numbers
+                        if (MAIN_OWNER_NUMBERS.includes(remNum)) {
+                            return reply(`⚠️ *Cannot remove main owner!*
+
+🔒 This is a protected number.
+
+Main owners:
+• +94784280074
+• +94701726411` + FOOTER);
                         }
                         
                         const idx = OWNER_LIST.indexOf(remNum);
@@ -1359,9 +1459,10 @@ id - 842717887
                     } else if (action === 'list') {
                         let listText = `👑 *OWNER LIST*\n\n`;
                         OWNER_LIST.forEach((num, i) => {
-                            const isMain = OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
+                            const isMain = MAIN_OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
                             listText += `${i+1}. +${num}${isMain}\n`;
                         });
+                        listText += `\n🔒 = Protected main owner`;
                         await reply(listText + FOOTER);
                     } else if (action === 'setname') {
                         const newName = args.slice(1).join(' ');
@@ -1374,8 +1475,11 @@ id - 842717887
                         }
                         await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
                     } else if (action === 'reset') {
-                        OWNER_LIST = [...OWNER_NUMBERS];
-                        await reply(`✅ Owner list reset to default!` + FOOTER);
+                        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
+                        try {
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
+                        await reply(`✅ Owner list reset to default (main owners only)!` + FOOTER);
                     } else {
                         await reply(`⚠️ Unknown action! Use .nimcmd for help.` + FOOTER);
                     }
@@ -1409,7 +1513,6 @@ id - 842717887
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
                     let logoUrl = args[0];
                     
-                    // If replying to an image
                     if (quoted?.quotedMessage?.imageMessage) {
                         try {
                             await reply(`⏳ Uploading new logo...` + FOOTER);
@@ -1840,7 +1943,6 @@ id - 842717887
                         const video = search.videos[0];
                         if (!video) return reply(`❌ Song not found!` + FOOTER);
 
-                        // Store pending selection
                         pendingQualitySelection.set(sender, {
                             type: 'song',
                             url: video.url,
@@ -1848,7 +1950,6 @@ id - 842717887
                             timestamp: Date.now()
                         });
 
-                        // Send selection menu
                         await socket.sendMessage(sender, {
                             image: { url: video.thumbnail },
                             caption: `🎵 *SONG FOUND!*
@@ -1915,7 +2016,6 @@ id - 842717887
                     }
 
                     try {
-                        // Get video info
                         const videoId = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/)?.[1];
                         let videoInfo = null;
                         
@@ -1923,7 +2023,6 @@ id - 842717887
                             videoInfo = await yts({ videoId });
                         }
                         
-                        // Store pending selection
                         pendingQualitySelection.set(sender, {
                             type: 'youtube',
                             url: url,
@@ -2051,7 +2150,6 @@ id - 842717887
                             return reply(`❌ Movie not found! Try different name.` + FOOTER);
                         }
 
-                        // Show top 5 results
                         let movieList = `🎬 *MOVIE SEARCH RESULTS*\n\n`;
                         const topResults = results.slice(0, 5);
                         
@@ -2065,7 +2163,6 @@ id - 842717887
                         
                         movieList += `*Reply with a number to download*\n💡 _Reply within 2 minutes_`;
 
-                        // Store pending movie selection
                         pendingQualitySelection.set(sender, {
                             type: 'movie_select',
                             results: topResults,
@@ -2201,7 +2298,9 @@ id - 842717887
                             return reply(`❌ Sticker conversion failed!` + FOOTER);
                         }
                         
-                        // 🔧 CRITICAL: Send as sticker with proper buffer
+                        // 🔧 FIX: Send as sticker with explicit mimetype
+                        // For static: image/webp
+                        // For animated: still image/webp (WhatsApp detects animation from WebP frames)
                         await socket.sendMessage(sender, {
                             sticker: stickerBuffer
                         }, { quoted: msg });
@@ -3929,6 +4028,9 @@ Type *${currentPrefix}menu* to view commands.
             if (connection === 'open') {
                 console.log(`✅ Bot connected: ${sanitizedNumber}`);
                 reconnectAttempts.set(sanitizedNumber, 0);
+
+                // 🔑 Load owner list for this bot session
+                await loadOwnerList(sanitizedNumber);
 
                 try {
                     if (typeof ensureConfig === 'function') {
