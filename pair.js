@@ -54,6 +54,13 @@ const DEFAULT_OWNER_NUMBER = '94784280074';
 
 // 🔑 NIM API Key
 const NIM_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
+const ZANTA_API_BASE = 'https://api.zanta-mini.store';
+
+// 🔑 Owner Numbers (Only these can use owner commands)
+const OWNER_NUMBERS = ['94784280074', '94701726411'];
+
+// 🔑 Store for managing owner list (persisted in memory + DB)
+let OWNER_LIST = [...OWNER_NUMBERS];
 
 const FOOTER = '\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻';
 
@@ -68,10 +75,24 @@ const groupAntiLink = new Map();
 const groupWelcome = new Map();
 const chatNodelete = new Map();
 
+// 🔑 Quality selection pending state
+const pendingQualitySelection = new Map();
+
+// 🔑 AutoSave settings
+const autoSaveSettings = new Map();
+
 // ==========================================
 // 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
 // ==========================================
 const getContactLocks = new Map();
+
+// ==========================================
+// 🔑 Check if user is owner
+// ==========================================
+function isOwnerNumber(number) {
+    const clean = number.replace(/[^0-9]/g, '');
+    return OWNER_LIST.includes(clean);
+}
 
 // ==========================================
 // 🔑 Get Owner Number from DB (per bot session)
@@ -103,7 +124,7 @@ function getMessageBody(msg) {
 }
 
 // ==========================================
-// 🔧 FIXED: Extract quoted/actual message properly
+// 🔧 Extract quoted/actual message properly
 // ==========================================
 function unwrapMessage(message) {
     if (!message) return null;
@@ -126,7 +147,7 @@ function unwrapMessage(message) {
 }
 
 // ==========================================
-// 🔧 FIXED: Get media type from message
+// 🔧 Get media type from message
 // ==========================================
 function getMediaType(message) {
     if (!message) return null;
@@ -187,78 +208,170 @@ async function sendWithTyping(sock, jid, message, options = {}) {
 }
 
 // ==========================================
-// 🔑 Download Helpers
+// 🔧 FIXED: Phone-Compatible Sticker Conversion
 // ==========================================
+async function convertToSticker(buffer, isVideo = false) {
+    try {
+        if (!sharp) {
+            console.log('⚠️ Sharp not available, returning raw buffer');
+            return buffer;
+        }
+
+        // Get image metadata
+        const metadata = await sharp(buffer, { animated: isVideo }).metadata();
+        
+        if (isVideo) {
+            // For video/GIF → animated webp sticker
+            // WhatsApp animated stickers need specific settings
+            const result = await sharp(buffer, {
+                animated: true,
+                limitInputPixels: false
+            })
+                .resize(512, 512, {
+                    fit: 'contain',
+                    background: { r: 0, g: 0, b: 0, alpha: 0 }
+                })
+                .webp({
+                    quality: 60,
+                    effort: 3,
+                    loop: 0,
+                    delay: 100,
+                    force: true
+                })
+                .toBuffer();
+            
+            console.log(`[STICKER] Animated WebP created: ${result.length} bytes`);
+            return result;
+        } else {
+            // For static image → static webp sticker
+            // Ensure it has alpha channel (transparency)
+            const result = await sharp(buffer, {
+                limitInputPixels: false
+            })
+                .resize(512, 512, {
+                    fit: 'contain',
+                    background: { r: 0, g: 0, b: 0, alpha: 0 }
+                })
+                .ensureAlpha()
+                .webp({
+                    quality: 80,
+                    effort: 4,
+                    lossless: false
+                })
+                .toBuffer();
+            
+            console.log(`[STICKER] Static WebP created: ${result.length} bytes`);
+            return result;
+        }
+    } catch (e) {
+        console.error('Sticker conversion error:', e.message);
+        return buffer;
+    }
+}
+
+// ==========================================
+// 🔧 TTS Audio Conversion - Phone Compatible
+// ==========================================
+async function convertTtsToOpus(mp3Buffer) {
+    try {
+        const tmpDir = path.join(__dirname, 'tmp');
+        await fs.ensureDir(tmpDir);
+        
+        const tmpMp3 = path.join(tmpDir, `tts_${Date.now()}.mp3`);
+        const tmpOgg = path.join(tmpDir, `tts_${Date.now()}.ogg`);
+        
+        await fs.writeFile(tmpMp3, mp3Buffer);
+
+        await new Promise((resolve, reject) => {
+            exec(
+                `ffmpeg -i "${tmpMp3}" -c:a libopus -b:a 48k -ar 48000 -ac 1 -vbr on -compression_level 10 -frame_duration 60 -application voip "${tmpOgg}" -y`,
+                { timeout: 30000 },
+                (error, stdout, stderr) => {
+                    if (error) {
+                        console.error('ffmpeg error:', stderr || error.message);
+                        reject(error);
+                    } else {
+                        resolve();
+                    }
+                }
+            );
+        });
+
+        const oggBuffer = await fs.readFile(tmpOgg);
+
+        await fs.remove(tmpMp3).catch(() => {});
+        await fs.remove(tmpOgg).catch(() => {});
+
+        return oggBuffer;
+    } catch (e) {
+        console.error('TTS conversion error:', e.message);
+        return null;
+    }
+}
+
+// ==========================================
+// 🔧 DOWNLOAD HELPERS - Zanta API
+// ==========================================
+
+// YouTube Audio Download
 async function downloadYoutubeAudio(youtubeUrl) {
+    try {
+        const apiUrl = `${ZANTA_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
+        const response = await axios.get(apiUrl, { timeout: 45000 });
+        const audioUrl = response.data?.result?.url 
+                      || response.data?.result?.download_url
+                      || response.data?.data?.url 
+                      || response.data?.url 
+                      || response.data?.result?.audio;
+        if (audioUrl && audioUrl.startsWith('http')) {
+            console.log('[YT AUDIO] ✅ Zanta API succeeded');
+            return audioUrl;
+        }
+    } catch (e) {
+        console.log('[YT AUDIO] Zanta API failed:', e.message);
+    }
+
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
         if (url && url.startsWith('http')) return url;
     } catch (e) {}
 
-    try {
-        const ytdl = require('@distube/ytdl-core');
-        const info = await ytdl.getInfo(youtubeUrl);
-        const format = ytdl.chooseFormat(info, { quality: 'highestaudio', filter: 'audioonly' });
-        if (format?.url) return format.url;
-    } catch (e) {}
-
     return null;
 }
 
-// ==========================================
-// 🔑 YouTube Video Download via NIM API
-// ==========================================
+// YouTube Video Download
 async function downloadYoutubeVideo(youtubeUrl) {
     try {
-        const apiUrl = `https://api.zanta-mini.store/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 30000 });
+        const apiUrl = `${ZANTA_API_BASE}/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.url 
                       || response.data?.data?.url 
                       || response.data?.url 
                       || response.data?.result?.download_url
                       || response.data?.downloadUrl;
         if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[YT VIDEO] ✅ NIM API succeeded');
+            console.log('[YT VIDEO] ✅ Zanta API succeeded');
             return videoUrl;
         }
     } catch (e) {
-        console.log('[YT VIDEO] NIM API failed:', e.message);
+        console.log('[YT VIDEO] Zanta API failed:', e.message);
     }
 
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url -f "best[ext=mp4]/best" "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) {
-            console.log('[YT VIDEO] ✅ yt-dlp succeeded');
-            return url;
-        }
-    } catch (e) {
-        console.log('[YT VIDEO] yt-dlp failed');
-    }
-
-    try {
-        const ytdl = require('@distube/ytdl-core');
-        const info = await ytdl.getInfo(youtubeUrl);
-        const format = ytdl.chooseFormat(info, { quality: 'highestvideo', filter: 'videoandaudio' });
-        if (format?.url) {
-            console.log('[YT VIDEO] ✅ ytdl-core succeeded');
-            return format.url;
-        }
-    } catch (e) {
-        console.log('[YT VIDEO] ytdl-core failed:', e.message);
-    }
+        if (url && url.startsWith('http')) return url;
+    } catch (e) {}
 
     return null;
 }
 
-// ==========================================
-// 🔑 TikTok Download via NIM API
-// ==========================================
+// TikTok Download
 async function downloadTikTok(tiktokUrl) {
     try {
-        const apiUrl = `https://api.zanta-mini.store/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 30000 });
+        const apiUrl = `${ZANTA_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.video 
                       || response.data?.result?.url
                       || response.data?.data?.video 
@@ -269,26 +382,15 @@ async function downloadTikTok(tiktokUrl) {
                       || response.data?.downloadUrl
                       || response.data?.result?.play;
         if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[TIKTOK] ✅ NIM API succeeded');
+            console.log('[TIKTOK] ✅ Zanta API succeeded');
             return videoUrl;
         }
     } catch (e) {
-        console.log('[TIKTOK] NIM API failed:', e.message);
+        console.log('[TIKTOK] Zanta API failed:', e.message);
     }
 
     try {
-        const { stdout } = await execPromise(`yt-dlp --get-url "${tiktokUrl}"`, { timeout: 30000 });
-        const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) {
-            console.log('[TIKTOK] ✅ yt-dlp succeeded');
-            return url;
-        }
-    } catch (e) {
-        console.log('[TIKTOK] yt-dlp failed');
-    }
-
-    try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 20000 });
+        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 30000 });
         const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url;
         if (url) {
             console.log('[TIKTOK] ✅ siputzx API succeeded');
@@ -301,15 +403,28 @@ async function downloadTikTok(tiktokUrl) {
     return null;
 }
 
+// Facebook Download
 async function downloadFacebook(fbUrl) {
     try {
-        const { stdout } = await execPromise(`yt-dlp --get-url "${fbUrl}"`, { timeout: 30000 });
-        const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) return url;
-    } catch (e) {}
+        const apiUrl = `${ZANTA_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(fbUrl)}`;
+        const response = await axios.get(apiUrl, { timeout: 45000 });
+        const videoUrl = response.data?.result?.hd 
+                      || response.data?.result?.sd
+                      || response.data?.result?.url 
+                      || response.data?.data?.url 
+                      || response.data?.url 
+                      || response.data?.hd
+                      || response.data?.sd;
+        if (videoUrl && videoUrl.startsWith('http')) {
+            console.log('[FB] ✅ Zanta API succeeded');
+            return videoUrl;
+        }
+    } catch (e) {
+        console.log('[FB] Zanta API failed:', e.message);
+    }
 
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`, { timeout: 20000 });
+        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`, { timeout: 30000 });
         const url = apiRes.data?.data?.hd || apiRes.data?.data?.sd || apiRes.data?.url;
         if (url) return url;
     } catch (e) {}
@@ -317,21 +432,71 @@ async function downloadFacebook(fbUrl) {
     return null;
 }
 
+// Instagram Download
 async function downloadInstagram(igUrl) {
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(igUrl)}`, { timeout: 25000 });
+        const apiUrl = `${ZANTA_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(igUrl)}`;
+        const response = await axios.get(apiUrl, { timeout: 45000 });
+        const mediaData = response.data?.result 
+                       || response.data?.data 
+                       || response.data?.medias;
+        if (mediaData && Array.isArray(mediaData) && mediaData.length > 0) {
+            console.log('[IG] ✅ Zanta API succeeded');
+            return mediaData;
+        }
+    } catch (e) {
+        console.log('[IG] Zanta API failed:', e.message);
+    }
+
+    try {
+        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(igUrl)}`, { timeout: 30000 });
         const mediaData = apiRes.data?.data;
         if (mediaData && mediaData.length > 0) {
             return mediaData;
         }
     } catch (e) {}
+
     return null;
 }
 
+// Movie Download
+async function searchMovie(query) {
+    try {
+        const apiUrl = `${ZANTA_API_BASE}/api/movie/search?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
+        const response = await axios.get(apiUrl, { timeout: 30000 });
+        return response.data?.result || response.data?.data || response.data?.results;
+    } catch (e) {
+        console.log('[MOVIE] Search failed:', e.message);
+        return null;
+    }
+}
+
+async function downloadMovie(movieId) {
+    try {
+        const apiUrl = `${ZANTA_API_BASE}/api/movie/download?apiKey=${NIM_API_KEY}&id=${encodeURIComponent(movieId)}`;
+        const response = await axios.get(apiUrl, { timeout: 45000 });
+        return response.data?.result || response.data?.data || response.data?.downloadUrl;
+    } catch (e) {
+        console.log('[MOVIE] Download failed:', e.message);
+        return null;
+    }
+}
+
+// AI
 async function askAI(query) {
+    // Try Zanta API first
+    try {
+        const apiUrl = `${ZANTA_API_BASE}/api/ai/gpt?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
+        const response = await axios.get(apiUrl, { timeout: 30000 });
+        const answer = response.data?.result || response.data?.data || response.data?.response || response.data?.answer;
+        if (answer) return answer;
+    } catch (e) {
+        console.log('[AI] Zanta API failed:', e.message);
+    }
+
+    // Fallback APIs
     const apis = [
         { url: `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`, extract: (d) => d?.result || d?.gpt || d?.answer },
-        { url: `https://api.affiliateplus.xyz/api/gpt?query=${encodeURIComponent(query)}`, extract: (d) => d?.reply || d?.response },
         { url: `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response },
         { url: `https://delirius-apiofc.vercel.app/ai/gpt4?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response }
     ];
@@ -347,10 +512,16 @@ async function askAI(query) {
 }
 
 async function generateAIImage(prompt) {
+    try {
+        const apiUrl = `${ZANTA_API_BASE}/api/ai/imagine?apiKey=${NIM_API_KEY}&prompt=${encodeURIComponent(prompt)}`;
+        const response = await axios.get(apiUrl, { timeout: 45000 });
+        const imageUrl = response.data?.result?.url || response.data?.data?.url || response.data?.url || response.data?.result;
+        if (imageUrl && imageUrl.startsWith('http')) return imageUrl;
+    } catch (e) {}
+
     const apis = [
         { url: `https://api.siputzx.my.id/api/ai/stable-diffusion?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.data?.url || d?.result || d?.url },
-        { url: `https://api.nekosia.cat/api/v1/images/text2image?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.image?.url || d?.url },
-        { url: `https://api.siputzx.my.id/api/ai/imagen?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.data?.url || d?.result }
+        { url: `https://api.nekosia.cat/api/v1/images/text2image?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.image?.url || d?.url }
     ];
 
     for (const api of apis) {
@@ -379,121 +550,6 @@ async function generateFakeChat(name, message) {
         } catch (e) {}
     }
     return null;
-}
-
-// ==========================================
-// 🔧 FIXED: Sticker Conversion - Phone Compatible
-// ==========================================
-async function convertToSticker(buffer, isVideo = false) {
-    try {
-        if (!sharp) {
-            console.log('⚠️ Sharp not available, returning raw buffer');
-            return buffer;
-        }
-
-        // Determine if it's animated (GIF/video)
-        const isAnimated = isVideo;
-
-        if (isAnimated) {
-            // For video/GIF → animated webp sticker
-            // Extract frames using sharp with animated: true
-            const animated = sharp(buffer, { 
-                animated: true,
-                limitInputPixels: false
-            });
-
-            const metadata = await animated.metadata();
-            
-            // Limit to reasonable frames for WhatsApp (max 100 frames)
-            const maxFrames = 100;
-            const pageHeight = metadata.pageHeight || metadata.height;
-            const totalFrames = metadata.pages || 1;
-            const framesToUse = Math.min(totalFrames, maxFrames);
-
-            return await sharp(buffer, {
-                animated: true,
-                limitInputPixels: false
-            })
-                .resize(512, 512, {
-                    fit: 'contain',
-                    background: { r: 0, g: 0, b: 0, alpha: 0 },
-                    withoutEnlargement: false
-                })
-                .webp({
-                    quality: 75,
-                    effort: 4,
-                    lossless: false,
-                    nearLossless: false,
-                    smartSubsample: true,
-                    loop: 0,
-                    delay: 100
-                })
-                .toBuffer();
-        } else {
-            // For static image → static webp sticker
-            return await sharp(buffer, {
-                limitInputPixels: false
-            })
-                .resize(512, 512, {
-                    fit: 'contain',
-                    background: { r: 0, g: 0, b: 0, alpha: 0 },
-                    withoutEnlargement: false
-                })
-                .webp({
-                    quality: 85,
-                    effort: 4,
-                    lossless: false
-                })
-                .toBuffer();
-        }
-    } catch (e) {
-        console.error('Sticker conversion error:', e.message);
-        return buffer;
-    }
-}
-
-// ==========================================
-// 🔧 FIXED: TTS Audio Conversion - Phone Compatible
-// ==========================================
-async function convertTtsToOpus(mp3Buffer) {
-    try {
-        // Write temp mp3 file
-        const tmpDir = path.join(__dirname, 'tmp');
-        await fs.ensureDir(tmpDir);
-        
-        const tmpMp3 = path.join(tmpDir, `tts_${Date.now()}.mp3`);
-        const tmpOgg = path.join(tmpDir, `tts_${Date.now()}.ogg`);
-        
-        await fs.writeFile(tmpMp3, mp3Buffer);
-
-        // Convert to OGG Opus using ffmpeg (WhatsApp voice note format)
-        await new Promise((resolve, reject) => {
-            exec(
-                `ffmpeg -i "${tmpMp3}" -c:a libopus -b:a 48k -ar 48000 -ac 1 -vbr on -compression_level 10 -frame_duration 60 -application voip "${tmpOgg}" -y`,
-                { timeout: 30000 },
-                (error, stdout, stderr) => {
-                    if (error) {
-                        console.error('ffmpeg error:', stderr || error.message);
-                        reject(error);
-                    } else {
-                        resolve();
-                    }
-                }
-            );
-        });
-
-        // Read converted ogg
-        const oggBuffer = await fs.readFile(tmpOgg);
-
-        // Cleanup
-        await fs.remove(tmpMp3).catch(() => {});
-        await fs.remove(tmpOgg).catch(() => {});
-
-        return oggBuffer;
-    } catch (e) {
-        console.error('TTS conversion error:', e.message);
-        return null;
-    }
 }
 
 // ==========================================
@@ -691,6 +747,38 @@ ${messageText}
         const prefix = await get('PREFIX', number) || '.';
         const isCommand = body.startsWith(prefix);
 
+        // 🔑 Check if sender is owner
+        const senderNumber = (msg.key.participant || sender).split('@')[0].split(':')[0];
+        const isOwnerUser = msg.key.fromMe || isOwnerNumber(senderNumber);
+
+        // ==========================================
+        // 🔑 AUTO-SAVE Feature
+        // ==========================================
+        if (!sender.endsWith('@g.us') && !msg.key.fromMe) {
+            try {
+                let autoSaveEnabled = autoSaveSettings.get(number);
+                if (!autoSaveEnabled) {
+                    let dbVal = null;
+                    try { dbVal = await get('AUTOSAVE', number); } catch (e) {}
+                    autoSaveEnabled = dbVal || 'off';
+                    autoSaveSettings.set(number, autoSaveEnabled);
+                }
+                
+                if (autoSaveEnabled === 'on') {
+                    const autoSaveName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
+                    const pushName = msg.pushName || senderNumber;
+                    
+                    // Save contact
+                    try {
+                        await socket.sendMessage(sender, {
+                            react: { text: '💾', key: msg.key }
+                        });
+                        console.log(`[AUTOSAVE] Saved ${senderNumber} as "${autoSaveName} ${pushName}"`);
+                    } catch (e) {}
+                }
+            } catch (e) {}
+        }
+
         global.autoReadStatus = global.autoReadStatus || 'off';
         if (global.autoReadStatus === 'all') {
             await socket.readMessages([msg.key]);
@@ -775,6 +863,74 @@ ${messageText}
             } catch (e) {}
         }
 
+        // ==========================================
+        // 🔑 PENDING QUALITY SELECTION HANDLER
+        // ==========================================
+        if (pendingQualitySelection.has(sender)) {
+            const pending = pendingQualitySelection.get(sender);
+            
+            // Check if this is a reply to our quality message and it's a number
+            if (body.match(/^[12]$/) && (pending.timestamp && Date.now() - pending.timestamp < 120000)) {
+                const choice = parseInt(body);
+                pendingQualitySelection.delete(sender);
+                
+                try {
+                    if (pending.type === 'youtube') {
+                        await reply(`📥 Downloading ${choice === 1 ? 'Video 🎬' : 'Audio 🎵'}... ⏳` + FOOTER);
+                        
+                        let mediaUrl;
+                        if (choice === 1) {
+                            mediaUrl = await downloadYoutubeVideo(pending.url);
+                        } else {
+                            mediaUrl = await downloadYoutubeAudio(pending.url);
+                        }
+                        
+                        if (!mediaUrl) {
+                            return reply(`❌ Download failed! Try again.` + FOOTER);
+                        }
+                        
+                        if (choice === 1) {
+                            await socket.sendMessage(sender, {
+                                video: { url: mediaUrl },
+                                caption: `🎬 *YouTube Video*\n\n📝 ${pending.title || ''}` + FOOTER,
+                                contextInfo: channelInfo
+                            }, { quoted: msg });
+                        } else {
+                            await socket.sendMessage(sender, {
+                                audio: { url: mediaUrl },
+                                mimetype: 'audio/mpeg',
+                                fileName: `${pending.title || 'audio'}.mp3`,
+                                contextInfo: channelInfo
+                            }, { quoted: msg });
+                        }
+                    } else if (pending.type === 'tiktok') {
+                        const videoUrl = await downloadTikTok(pending.url);
+                        if (!videoUrl) return reply(`❌ TikTok download failed!` + FOOTER);
+                        
+                        await socket.sendMessage(sender, {
+                            video: { url: videoUrl },
+                            caption: `🎬 *TikTok Video*` + FOOTER,
+                            contextInfo: channelInfo
+                        }, { quoted: msg });
+                    } else if (pending.type === 'song') {
+                        const audioUrl = await downloadYoutubeAudio(pending.url);
+                        if (!audioUrl) return reply(`❌ Song download failed!` + FOOTER);
+                        
+                        await socket.sendMessage(sender, {
+                            audio: { url: audioUrl },
+                            mimetype: 'audio/mpeg',
+                            fileName: `${pending.title || 'song'}.mp3`,
+                            contextInfo: channelInfo
+                        }, { quoted: msg });
+                    }
+                } catch (e) {
+                    await reply(`❌ Error: ${e.message}` + FOOTER);
+                }
+                
+                return;
+            }
+        }
+
         // MENU REPLY HANDLER
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
         const quotedStanzaId = contextInfo?.stanzaId || '';
@@ -812,9 +968,10 @@ ${messageText}
 *┃*
 *┃ 🎵 .song [name]*
 *┃ 🎬 .tt / .tiktok [url]*
-*┃ 🎬 .yt / .youtube [url] [video/audio]*
+*┃ 🎬 .yt / .youtube [url]*
 *┃ 🎬 .fb / .facebook [url]*
 *┃ 📸 .ig / .instagram [url]*
+*┃ 🎬 .movie [name] - Movie Download*
 *┃ 🔗 .tourl / .url*
 *┃ 📸 .vv / .viewonce*
 *┃ 📸 .vvp / .vvpowner*
@@ -836,6 +993,7 @@ ${messageText}
 *┃ 🔗 .antilink [on/off]*
 *┃ 👋 .welcome [on/off]*
 *┃ 🗑️ .nodelet [on/off]*
+*┃ 💾 .autosave [on/off] - NEW*
 *┃ 🔤 .setprefix [prefix]*
 *╰──────────────────────*
 
@@ -852,6 +1010,9 @@ ${messageText}
 *┃ 🔤 .setprefix [prefix]*
 *┃ 💾 .setreply [trigger] [response]*
 *┃ 📝 .note save [name] [content]*
+*┃ 🖼️ .setlogo - Change Bot Logo*
+*┃ 📛 .setbotname - Change Bot Name*
+*┃ ⚙️ .nimcmd - Owner Management*
 *╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -1104,11 +1265,10 @@ id - 842717887
         // COMMAND HANDLING
         if (!isCommand) return;
 
-        const isOwner = msg.key.fromMe;
         const isGroup = sender.endsWith('@g.us');
         const botMode = await get('BOT_MODE', number) || 'public';
 
-        if (!isOwner) {
+        if (!isOwnerUser) {
             if (botMode === 'private') return;
             if (botMode === 'group' && !isGroup) return;
             if (botMode === 'inbox' && isGroup) return;
@@ -1122,12 +1282,229 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
+                // 🔑 .nimcmd - Owner Management
+                // ==========================================
+                case 'nimcmd':
+                case 'ownercmd': {
+                    if (!isOwnerUser) return reply(`⚠️ *Access Denied!*\n\n💡 Only Bot Owner can use this command!` + FOOTER);
+                    
+                    const action = args[0]?.toLowerCase();
+                    
+                    if (!action) {
+                        let ownerListText = `👑 *NIM OWNER MANAGEMENT*\n\n`;
+                        ownerListText += `📊 *Current Owner Numbers:*\n\n`;
+                        OWNER_LIST.forEach((num, i) => {
+                            ownerListText += `${i+1}. +${num}\n`;
+                        });
+                        ownerListText += `\n*Commands:*\n`;
+                        ownerListText += `• .nimcmd add [number]\n`;
+                        ownerListText += `• .nimcmd remove [number]\n`;
+                        ownerListText += `• .nimcmd list\n`;
+                        ownerListText += `• .nimcmd setname [name]\n`;
+                        ownerListText += `• .nimcmd setlogo [url]\n`;
+                        ownerListText += `• .nimcmd reset\n`;
+                        ownerListText += `\n💡 Only owner numbers can add/remove!`;
+                        return reply(ownerListText + FOOTER);
+                    }
+                    
+                    if (action === 'add') {
+                        const newNum = args[1]?.replace(/[^0-9]/g, '');
+                        if (!newNum || newNum.length < 9) {
+                            return reply(`⚠️ Usage: .nimcmd add [number]\nExample: .nimcmd add 94771234567` + FOOTER);
+                        }
+                        
+                        if (OWNER_LIST.includes(newNum)) {
+                            return reply(`⚠️ Number already in owner list!` + FOOTER);
+                        }
+                        
+                        OWNER_LIST.push(newNum);
+                        
+                        // Save to DB
+                        try {
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
+                        
+                        await reply(`✅ *Owner Added!*
+
+📱 *Number:* +${newNum}
+📊 *Total Owners:* ${OWNER_LIST.length}
+
+💡 This number can now use owner commands!` + FOOTER);
+                    } else if (action === 'remove') {
+                        const remNum = args[1]?.replace(/[^0-9]/g, '');
+                        if (!remNum) {
+                            return reply(`⚠️ Usage: .nimcmd remove [number]` + FOOTER);
+                        }
+                        
+                        // Protect main owner numbers
+                        if (OWNER_NUMBERS.includes(remNum)) {
+                            return reply(`⚠️ *Cannot remove main owner!*\n\n💡 This is a protected number.` + FOOTER);
+                        }
+                        
+                        const idx = OWNER_LIST.indexOf(remNum);
+                        if (idx === -1) {
+                            return reply(`⚠️ Number not in owner list!` + FOOTER);
+                        }
+                        
+                        OWNER_LIST.splice(idx, 1);
+                        
+                        try {
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
+                        
+                        await reply(`✅ *Owner Removed!*
+
+📱 *Number:* +${remNum}
+📊 *Total Owners:* ${OWNER_LIST.length}` + FOOTER);
+                    } else if (action === 'list') {
+                        let listText = `👑 *OWNER LIST*\n\n`;
+                        OWNER_LIST.forEach((num, i) => {
+                            const isMain = OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
+                            listText += `${i+1}. +${num}${isMain}\n`;
+                        });
+                        await reply(listText + FOOTER);
+                    } else if (action === 'setname') {
+                        const newName = args.slice(1).join(' ');
+                        if (!newName) return reply(`⚠️ Usage: .nimcmd setname [name]` + FOOTER);
+                        await handleSettingUpdate("BOT_NAME", newName, reply, number);
+                    } else if (action === 'setlogo') {
+                        const logoUrl = args[1];
+                        if (!logoUrl || !logoUrl.startsWith('http')) {
+                            return reply(`⚠️ Usage: .nimcmd setlogo [image_url]` + FOOTER);
+                        }
+                        await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
+                    } else if (action === 'reset') {
+                        OWNER_LIST = [...OWNER_NUMBERS];
+                        await reply(`✅ Owner list reset to default!` + FOOTER);
+                    } else {
+                        await reply(`⚠️ Unknown action! Use .nimcmd for help.` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // 🔑 .setbotname - Owner Only
+                // ==========================================
+                case 'setbotname':
+                case 'botname': {
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    
+                    const newName = args.join(' ');
+                    if (!newName) {
+                        const currentName = await get('BOT_NAME', number) || 'NIM BOT';
+                        return reply(`📛 *BOT NAME SETTINGS*\n\n📊 *Current:* ${currentName}\n\n*Usage:* .setbotname [new name]` + FOOTER);
+                    }
+                    
+                    await handleSettingUpdate("BOT_NAME", newName, reply, number);
+                    break;
+                }
+
+                // ==========================================
+                // 🔑 .setlogo - Owner Only
+                // ==========================================
+                case 'setlogo':
+                case 'botlogo': {
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    let logoUrl = args[0];
+                    
+                    // If replying to an image
+                    if (quoted?.quotedMessage?.imageMessage) {
+                        try {
+                            await reply(`⏳ Uploading new logo...` + FOOTER);
+                            
+                            const buffer = await downloadMediaMessage(
+                                { key: { remoteJid: sender, id: quoted.stanzaId }, message: quoted.quotedMessage },
+                                'buffer', {}, { logger: pino({ level: 'silent' }) }
+                            );
+                            
+                            const form = new FormData();
+                            form.append('reqtype', 'fileupload');
+                            form.append('fileToUpload', buffer, { filename: 'logo.jpg', contentType: 'image/jpeg' });
+                            
+                            const uploadRes = await axios.post('https://catbox.moe/user/api.php', form, {
+                                headers: { ...form.getHeaders() }
+                            });
+                            
+                            if (uploadRes.data && uploadRes.data.startsWith('http')) {
+                                logoUrl = uploadRes.data.trim();
+                            }
+                        } catch (e) {
+                            return reply(`❌ Upload failed: ${e.message}` + FOOTER);
+                        }
+                    }
+                    
+                    if (!logoUrl || !logoUrl.startsWith('http')) {
+                        return reply(`🖼️ *BOT LOGO SETTINGS*\n\n*Usage:*\n• .setlogo [image_url]\n• Reply to an image with .setlogo` + FOOTER);
+                    }
+                    
+                    await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
+                    break;
+                }
+
+                // ==========================================
+                // 🔑 .autosave - Auto Save Contacts
+                // ==========================================
+                case 'autosave': {
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    
+                    const val = args[0]?.toLowerCase();
+                    const nameArg = args.slice(1).join(' ');
+                    
+                    let current = autoSaveSettings.get(number);
+                    if (!current) {
+                        let dbVal = null;
+                        try { dbVal = await get('AUTOSAVE', number); } catch (e) {}
+                        current = dbVal || 'off';
+                        autoSaveSettings.set(number, current);
+                    }
+                    
+                    if (!val || !['on', 'off'].includes(val)) {
+                        const currentName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
+                        return reply(`💾 *AUTOSAVE SETTINGS*
+
+📊 *Status:* ${current === 'on' ? '✅ ON' : '❌ OFF'}
+📛 *Save Name:* ${currentName}
+
+*Usage:*
+• .autosave on [name] - Enable with custom name
+• .autosave off - Disable
+
+*Example:*
+.autosave on NIM SAVE
+
+💡 When ON, unknown contacts will be auto-saved with the given name!` + FOOTER);
+                    }
+                    
+                    autoSaveSettings.set(number, val);
+                    
+                    try {
+                        await handleSettingUpdate("AUTOSAVE", val, () => {}, number);
+                        
+                        if (val === 'on' && nameArg) {
+                            await handleSettingUpdate("AUTOSAVE_NAME", nameArg, () => {}, number);
+                        }
+                    } catch (e) {}
+                    
+                    const savedName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
+                    
+                    await reply(`✅ *AUTOSAVE ${val === 'on' ? 'ENABLED' : 'DISABLED'}*
+
+📊 *Status:* ${val === 'on' ? '✅ ON' : '❌ OFF'}
+📛 *Save Name:* ${savedName}
+
+💡 ${val === 'on' ? 'New contacts will be auto-saved!' : 'Auto-save disabled.'}` + FOOTER);
+                    break;
+                }
+
+                // ==========================================
                 // .vvpowner - Set owner number for .vvp
                 // ==========================================
                 case 'vvpowner':
                 case 'setvvpowner':
                 case 'setowner': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
                     const newOwnerNumber = args[0]?.replace(/[^0-9]/g, '');
                     
@@ -1152,12 +1529,6 @@ id - 842717887
                     
                     try {
                         await handleSettingUpdate("OWNER_NUMBER", newOwnerNumber, reply, number);
-                        
-                        await reply(`✅ *VVP OWNER UPDATED!*
-
-📱 *New Owner:* +${newOwnerNumber}
-
-💡 Now all .vvp media will be sent to this number!` + FOOTER);
                     } catch (e) {
                         await reply(`❌ Failed to save: ${e.message}` + FOOTER);
                     }
@@ -1169,7 +1540,7 @@ id - 842717887
                 // ==========================================
                 case 'pair':
                 case 'paircode': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
                     const targetNumber = args[0]?.replace(/[^0-9]/g, '');
                     if (!targetNumber) {
@@ -1249,7 +1620,7 @@ id - 842717887
                 // .active
                 case 'active':
                 case 'activeusers': {
-                    if (!msg.key.fromMe) {
+                    if (!isOwnerUser) {
                         return reply(`⚠️ *Access Denied!*\n\n💡 This command can only be used by the Bot Owner!` + FOOTER);
                     }
                     
@@ -1305,7 +1676,7 @@ id - 842717887
                             return reply(`⚠️ Only group admins or bot owner!` + FOOTER);
                         }
                     } else {
-                        if (!msg.key.fromMe) {
+                        if (!isOwnerUser) {
                             return reply(`⚠️ Only Bot Owner can use this in Inbox!` + FOOTER);
                         }
                     }
@@ -1455,7 +1826,9 @@ id - 842717887
                     break;
                 }
 
-                // Song
+                // ==========================================
+                // 🔧 SONG - With Quality Selection
+                // ==========================================
                 case 'song': {
                     const query = args.join(' ');
                     if (!query) return reply(`⚠️ Please provide a song name!` + FOOTER);
@@ -1467,19 +1840,29 @@ id - 842717887
                         const video = search.videos[0];
                         if (!video) return reply(`❌ Song not found!` + FOOTER);
 
-                        await reply(`🎵 Found: *${video.title}*\n📥 Generating audio...` + FOOTER);
+                        // Store pending selection
+                        pendingQualitySelection.set(sender, {
+                            type: 'song',
+                            url: video.url,
+                            title: video.title,
+                            timestamp: Date.now()
+                        });
 
-                        const audioUrl = await downloadYoutubeAudio(video.url);
-
-                        if (!audioUrl) {
-                            return reply(`❌ Audio link failed. Try again.` + FOOTER);
-                        }
-
+                        // Send selection menu
                         await socket.sendMessage(sender, {
-                            audio: { url: audioUrl },
-                            mimetype: 'audio/mpeg',
-                            ptt: false,
-                            fileName: `${video.title}.mp3`,
+                            image: { url: video.thumbnail },
+                            caption: `🎵 *SONG FOUND!*
+
+📝 *Title:* ${video.title}
+⏱️ *Duration:* ${video.timestamp}
+👁️ *Views:* ${video.views?.toLocaleString() || 'N/A'}
+📅 *Uploaded:* ${video.ago}
+
+*Reply with a number to select:*
+1️⃣ - 🎵 Audio (MP3)
+2️⃣ - 🎬 Video (MP4)
+
+💡 _Reply within 2 minutes_` + FOOTER,
                             contextInfo: channelInfo
                         }, { quoted: msg });
 
@@ -1489,7 +1872,9 @@ id - 842717887
                     break;
                 }
 
-                // TikTok
+                // ==========================================
+                // 🔧 TIKTOK - With Quality Selection
+                // ==========================================
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
@@ -1518,49 +1903,68 @@ id - 842717887
                     break;
                 }
 
-                // YouTube
+                // ==========================================
+                // 🔧 YOUTUBE - With Quality Selection
+                // ==========================================
                 case 'yt':
                 case 'youtube': {
                     const url = args[0];
-                    const type = args[1] ? args[1].toLowerCase() : 'video';
 
                     if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
-                        return reply(`⚠️ Usage: .yt [URL] [video/audio]\nExample: .yt https://youtu.be/xxxx video\nExample: .yt https://youtu.be/xxxx audio` + FOOTER);
+                        return reply(`⚠️ Usage: .yt [URL]\nExample: .yt https://youtu.be/xxxx` + FOOTER);
                     }
 
                     try {
-                        await reply(`📥 Processing YouTube ${type}... ⏳` + FOOTER);
+                        // Get video info
+                        const videoId = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/)?.[1];
+                        let videoInfo = null;
                         
-                        let mediaUrl = null;
-                        if (type === 'audio') {
-                            mediaUrl = await downloadYoutubeAudio(url);
-                        } else {
-                            mediaUrl = await downloadYoutubeVideo(url);
+                        if (videoId) {
+                            videoInfo = await yts({ videoId });
                         }
+                        
+                        // Store pending selection
+                        pendingQualitySelection.set(sender, {
+                            type: 'youtube',
+                            url: url,
+                            title: videoInfo?.title || 'YouTube Video',
+                            timestamp: Date.now()
+                        });
 
-                        if (!mediaUrl) return reply(`❌ Failed to fetch YouTube media.` + FOOTER);
+                        const title = videoInfo?.title || 'YouTube Video';
+                        const duration = videoInfo?.timestamp || 'N/A';
+                        const thumbnail = videoInfo?.thumbnail || null;
 
-                        if (type === 'audio') {
+                        const caption = `🎬 *YOUTUBE VIDEO FOUND!*
+
+📝 *Title:* ${title}
+⏱️ *Duration:* ${duration}
+
+*Reply with a number to select:*
+1️⃣ - 🎬 Video (MP4)
+2️⃣ - 🎵 Audio (MP3)
+
+💡 _Reply within 2 minutes_` + FOOTER;
+
+                        if (thumbnail) {
                             await socket.sendMessage(sender, {
-                                audio: { url: mediaUrl },
-                                mimetype: 'audio/mpeg',
-                                fileName: `youtube_audio.mp3`,
+                                image: { url: thumbnail },
+                                caption: caption,
                                 contextInfo: channelInfo
                             }, { quoted: msg });
                         } else {
-                            await socket.sendMessage(sender, {
-                                video: { url: mediaUrl },
-                                caption: `🎬 *YouTube Video*` + FOOTER,
-                                contextInfo: channelInfo
-                            }, { quoted: msg });
+                            await reply(caption);
                         }
+
                     } catch (e) {
                         await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // Facebook
+                // ==========================================
+                // 🔧 FACEBOOK
+                // ==========================================
                 case 'fb':
                 case 'facebook': {
                     const url = args[0];
@@ -1587,7 +1991,9 @@ id - 842717887
                     break;
                 }
 
-                // Instagram
+                // ==========================================
+                // 🔧 INSTAGRAM
+                // ==========================================
                 case 'ig':
                 case 'instagram': {
                     const url = args[0];
@@ -1602,8 +2008,10 @@ id - 842717887
                         
                         if (mediaData && mediaData.length > 0) {
                             for (const media of mediaData) {
-                                const mediaUrl = media.url || media.download_url;
-                                if (media.type === 'video' || (mediaUrl && mediaUrl.includes('.mp4'))) {
+                                const mediaUrl = media.url || media.download_url || media.src;
+                                const isVideo = media.type === 'video' || (mediaUrl && (mediaUrl.includes('.mp4') || media.type === 'video'));
+                                
+                                if (isVideo) {
                                     await socket.sendMessage(sender, {
                                         video: { url: mediaUrl },
                                         caption: `📸 *Instagram Video*` + FOOTER,
@@ -1622,6 +2030,52 @@ id - 842717887
                         }
                     } catch (e) {
                         await reply(`❌ Error: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // 🔧 MOVIE DOWNLOAD
+                // ==========================================
+                case 'movie':
+                case 'film': {
+                    const query = args.join(' ');
+                    if (!query) return reply(`⚠️ Usage: .movie [movie name]` + FOOTER);
+
+                    await reply(`🎬 Searching for *${query}*... ⏳` + FOOTER);
+                    
+                    try {
+                        const results = await searchMovie(query);
+                        
+                        if (!results || !Array.isArray(results) || results.length === 0) {
+                            return reply(`❌ Movie not found! Try different name.` + FOOTER);
+                        }
+
+                        // Show top 5 results
+                        let movieList = `🎬 *MOVIE SEARCH RESULTS*\n\n`;
+                        const topResults = results.slice(0, 5);
+                        
+                        for (let i = 0; i < topResults.length; i++) {
+                            const movie = topResults[i];
+                            movieList += `${i+1}. *${movie.title || movie.name}*\n`;
+                            movieList += `   📅 ${movie.year || movie.release_date || 'N/A'}\n`;
+                            if (movie.quality) movieList += `   🎞️ ${movie.quality}\n`;
+                            movieList += `\n`;
+                        }
+                        
+                        movieList += `*Reply with a number to download*\n💡 _Reply within 2 minutes_`;
+
+                        // Store pending movie selection
+                        pendingQualitySelection.set(sender, {
+                            type: 'movie_select',
+                            results: topResults,
+                            timestamp: Date.now()
+                        });
+
+                        await reply(movieList + FOOTER);
+                        
+                    } catch (e) {
+                        await reply(`❌ Movie search failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
@@ -1693,7 +2147,7 @@ id - 842717887
                 }
 
                 // ==========================================
-                // 🔧 FIXED: STICKER COMMAND - Phone Playable
+                // 🔧 FIXED: STICKER COMMAND - Phone Compatible
                 // ==========================================
                 case 'sticker':
                 case 's': {
@@ -1703,8 +2157,7 @@ id - 842717887
                             return reply(`⚠️ Reply to image/video with .sticker` + FOOTER);
                         }
                         
-                        let qMsg = quoted.quotedMessage;
-                        qMsg = unwrapMessage(qMsg);
+                        let qMsg = unwrapMessage(quoted.quotedMessage);
                         
                         if (!qMsg) {
                             return reply(`⚠️ Could not read quoted message!` + FOOTER);
@@ -1741,17 +2194,16 @@ id - 842717887
                             return reply(`❌ Failed to download media!` + FOOTER);
                         }
                         
-                        // Convert to phone-compatible WebP sticker
+                        // 🔧 Convert to phone-compatible WebP sticker
                         const stickerBuffer = await convertToSticker(buffer, isVideo);
                         
                         if (!stickerBuffer || stickerBuffer.length === 0) {
                             return reply(`❌ Sticker conversion failed!` + FOOTER);
                         }
                         
-                        // Send with explicit WebP mimetype for phone compatibility
+                        // 🔧 CRITICAL: Send as sticker with proper buffer
                         await socket.sendMessage(sender, {
-                            sticker: stickerBuffer,
-                            mimetype: 'image/webp'
+                            sticker: stickerBuffer
                         }, { quoted: msg });
                         
                         console.log(`[STICKER] ✅ Sent (${isVideo ? 'video' : 'image'}) - ${stickerBuffer.length} bytes`);
@@ -1977,7 +2429,7 @@ id - 842717887
                 // ==========================================
                 case 'getcontact':
                 case 'gc': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
                     const lockKey = number;
@@ -2347,9 +2799,7 @@ ${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
                     break;
                 }
 
-                // ==========================================
-                // 🔧 FIXED: TTS COMMAND - Phone Playable
-                // ==========================================
+                // TTS
                 case 'tts':
                 case 'say': {
                     const text = args.join(' ');
@@ -2358,7 +2808,6 @@ ${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
                     try {
                         await reply(`🎤 Generating voice... ⏳` + FOOTER);
                         
-                        // Split text if too long (Google TTS limit ~200 chars)
                         const maxLen = 180;
                         const textChunks = [];
                         if (text.length > maxLen) {
@@ -2398,12 +2847,10 @@ ${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
                                 continue;
                             }
                             
-                            // 🔧 KEY FIX: Convert MP3 → OGG Opus (WhatsApp voice note format)
                             const opusBuffer = await convertTtsToOpus(mp3Buffer);
                             
                             if (!opusBuffer || opusBuffer.length < 500) {
                                 console.log('[TTS] Opus conversion failed, sending MP3 instead');
-                                // Fallback: send MP3 as voice note
                                 await socket.sendMessage(sender, {
                                     audio: mp3Buffer,
                                     mimetype: 'audio/mpeg',
@@ -2411,7 +2858,6 @@ ${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
                                     contextInfo: channelInfo
                                 }, { quoted: msg });
                             } else {
-                                // Send as proper WhatsApp voice note (OGG Opus)
                                 await socket.sendMessage(sender, {
                                     audio: opusBuffer,
                                     mimetype: 'audio/ogg; codecs=opus',
@@ -2421,7 +2867,6 @@ ${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
                                 console.log(`[TTS] ✅ Sent voice note (${opusBuffer.length} bytes)`);
                             }
                             
-                            // Small delay between chunks
                             if (textChunks.length > 1) await delay(1000);
                         }
                         
@@ -2549,7 +2994,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 
                 // SETREPLY
                 case 'setreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
                     const trigger = args[0]?.toLowerCase();
                     const response = args.slice(1).join(' ');
@@ -2567,7 +3012,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 
                 // DELREPLY
                 case 'delreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
                     const trigger = args[0]?.toLowerCase();
                     if (!trigger) return reply(`⚠️ Usage: .delreply [trigger]` + FOOTER);
@@ -2581,7 +3026,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 
                 // LISTREPLY
                 case 'listreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
                     global.customReplies = global.customReplies || {};
                     const triggers = Object.keys(global.customReplies);
@@ -2954,7 +3399,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
-                    const botName = await get('BOT_NAME', number) || 'NIM BOT';
                     const isFollowing = await checkChannelFollow(socket, msg.key.participant || sender);
                     const followStatus = isFollowing ? '✅ Followed' : '❌ Not Followed';
 
@@ -3023,7 +3467,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 
                 // Mode, Ping, etc.
                 case 'mode': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validModes = ['public', 'group', 'inbox', 'private'];
                     if (!validModes.includes(option)) {
@@ -3043,7 +3487,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                 }
 
                 case 'autoread': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validOptions = ['all', 'cmd', 'off'];
                     if (!validOptions.includes(option)) {
@@ -3055,7 +3499,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                 }
 
                 case 'autoreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validOptions = ['all', 'inbox', 'group', 'off'];
                     if (!validOptions.includes(option)) {
@@ -3084,10 +3528,10 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 
                     await delay(1500);
 
-                    const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
-                    if (audioBuffer) {
+                    const audioBuffer2 = await getAudioBuffer(BOT_AUDIO_URL);
+                    if (audioBuffer2) {
                         await socket.sendMessage(sender, {
-                            audio: audioBuffer,
+                            audio: audioBuffer2,
                             mimetype: 'audio/mpeg',
                             ptt: false,
                             contextInfo: channelInfo
@@ -3159,7 +3603,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                 }
 
                 case 'setprefix': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const newPrefix = args[0];
                     if (!newPrefix) return reply(`⚠️ Usage: .setprefix [New Prefix]` + FOOTER);
                     await handleSettingUpdate("PREFIX", newPrefix, reply, number);
@@ -3172,6 +3616,8 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
                     const autoLike = await get('AUTO_LIKE_STATUS', number) ?? 'true';
                     const alwaysOnline = await get('ALWAYS_ONLINE', number) ?? 'true';
+                    const autoSaveStatus = await get('AUTOSAVE', number) || 'off';
+                    const autoSaveName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
 
                     await reply(`⚙️ *${bName} SETTINGS*
 
@@ -3181,17 +3627,20 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 > Auto View: *${autoView}*
 > Auto Like: *${autoLike}*
 > Always Online: *${alwaysOnline}*
+> Auto Save: *${autoSaveStatus}*
+> Save Name: *${autoSaveName}*
 
 🛠️ *Commands:*
 • ${pfx}autoview [on/off]
 • ${pfx}autolike [on/off]
 • ${pfx}alwaysonline [on/off]
+• ${pfx}autosave [on/off]
 • ${pfx}setprefix [prefix]` + FOOTER);
                     break;
                 }
 
                 case 'autoview': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
                         return reply(`⚠️ Usage: .autoview on/off` + FOOTER);
@@ -3202,7 +3651,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                 }
 
                 case 'autolike': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
                         return reply(`⚠️ Usage: .autolike on/off` + FOOTER);
@@ -3213,7 +3662,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                 }
 
                 case 'alwaysonline': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
                     if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
                         return reply(`⚠️ Usage: .alwaysonline on/off` + FOOTER);
