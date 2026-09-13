@@ -2,7 +2,7 @@
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
  * Mode: Full Features Enabled
- * Fixed: Sticker (Phone Playable), TTS (Phone Playable), NIM API
+ * Fixed: Sticker Phone, Owner CMD, Working APIs, AutoSave
  */
 const {
     default: makeWASocket,
@@ -27,20 +27,11 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 const FormData = require('form-data');
 
-// Sharp for sticker conversion
 let sharp;
 try {
     sharp = require('sharp');
 } catch (e) {
-    console.log('⚠️ sharp not installed. Sticker will use raw buffer.');
-}
-
-// ffmpeg for audio conversion
-let ffmpeg;
-try {
-    ffmpeg = require('fluent-ffmpeg');
-} catch (e) {
-    console.log('⚠️ fluent-ffmpeg not installed. Using system ffmpeg.');
+    console.log('⚠️ sharp not installed');
 }
 
 const Session = require('./Id');
@@ -53,30 +44,39 @@ const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r'
 const CHANNEL_JID = '120363362308230584@newsletter';
 const DEFAULT_OWNER_NUMBER = '94784280074';
 
-// 🔑 NIM API Key
+// 🔑 NIM API
 const NIM_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
+const NIM_API_BASE = 'https://api.zanta-mini.store';
 
-const FOOTER = '\n\n> *Creator by Nimsara* 🧃🇱🇰';
+// 🔒 Owner Numbers (Only these can use .Nimsara)
+const OWNER_NUMBERS = ['94784280074', '94740532742', '94701726411'];
+
+const FOOTER = '\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻';
 
 const socketCreationTime = new Map();
 const activeSockets = new Map();
 const messageCache = new Map();
 const deletedMessages = new Map();
 const reconnectAttempts = new Map();
-const userCategoryState = new Map();
 const menuMessageIds = new Map();
 const groupAntiLink = new Map();
 const groupWelcome = new Map();
 const chatNodelete = new Map();
-
-// ==========================================
-// 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
-// ==========================================
 const getContactLocks = new Map();
+const pendingMediaRequests = new Map();
 
 // ==========================================
-// 🔑 Get Owner Number from DB (per bot session)
+// 🔒 Owner Check (Only 3 numbers)
 // ==========================================
+function isOwnerNumber(senderJid) {
+    if (!senderJid) return false;
+    const cleanNum = senderJid.replace(/[^0-9]/g, '').split('@')[0];
+    // Also normalize to last 11-12 digits for safety
+    return OWNER_NUMBERS.some(ownerNum => {
+        return cleanNum === ownerNum || cleanNum.endsWith(ownerNum) || ownerNum.endsWith(cleanNum);
+    });
+}
+
 async function getOwnerNumber(botNumber) {
     try {
         const ownerNum = await get(`OWNER_NUMBER`, botNumber);
@@ -86,7 +86,7 @@ async function getOwnerNumber(botNumber) {
 }
 
 // ==========================================
-// Get message body
+// Message Helpers
 // ==========================================
 function getMessageBody(msg) {
     if (!msg.message) return '';
@@ -103,37 +103,26 @@ function getMessageBody(msg) {
         '';
 }
 
-// ==========================================
-// 🔧 FIXED: Extract quoted/actual message properly
-// ==========================================
 function unwrapMessage(message) {
     if (!message) return null;
-    
-    while (
-        message.ephemeralMessage ||
-        message.viewOnceMessage ||
-        message.viewOnceMessageV2 ||
-        message.viewOnceMessageV2Extension ||
-        message.documentWithCaptionMessage
-    ) {
+    let guard = 0;
+    while ((message.ephemeralMessage || message.viewOnceMessage || 
+            message.viewOnceMessageV2 || message.viewOnceMessageV2Extension ||
+            message.documentWithCaptionMessage) && guard < 10) {
         if (message.ephemeralMessage) message = message.ephemeralMessage.message;
         else if (message.viewOnceMessage) message = message.viewOnceMessage.message;
         else if (message.viewOnceMessageV2) message = message.viewOnceMessageV2.message;
         else if (message.viewOnceMessageV2Extension) message = message.viewOnceMessageV2Extension.message;
         else if (message.documentWithCaptionMessage) message = message.documentWithCaptionMessage.message;
+        guard++;
     }
-    
     return message;
 }
 
-// ==========================================
-// 🔧 FIXED: Get media type from message
-// ==========================================
 function getMediaType(message) {
     if (!message) return null;
     const unwrapped = unwrapMessage(message);
     if (!unwrapped) return null;
-    
     const types = ['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'];
     for (const type of types) {
         if (unwrapped[type]) return { type, data: unwrapped[type] };
@@ -144,18 +133,13 @@ function getMediaType(message) {
 async function getAudioBuffer(url) {
     try {
         const response = await fetch(url);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const arrayBuffer = await response.arrayBuffer();
-        return Buffer.from(arrayBuffer);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return Buffer.from(await response.arrayBuffer());
     } catch (e) {
-        console.error("Error downloading audio buffer:", e.message);
         return null;
     }
 }
 
-// ==========================================
-// 🔑 Channel Forward Context Info
-// ==========================================
 function getChannelContext() {
     return {
         forwardingScore: 999,
@@ -168,12 +152,8 @@ function getChannelContext() {
     };
 }
 
-// ==========================================
-// 🔑 Bot Detection Bypass Helpers
-// ==========================================
 async function humanDelay(minMs = 1500, maxMs = 3500) {
-    const randomDelay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
-    await delay(randomDelay);
+    await delay(Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs);
 }
 
 async function sendWithTyping(sock, jid, message, options = {}) {
@@ -183,23 +163,149 @@ async function sendWithTyping(sock, jid, message, options = {}) {
         await sock.sendPresenceUpdate('paused', jid);
         await delay(300);
     } catch (e) {}
-    
     return await sock.sendMessage(jid, message, options);
 }
 
 // ==========================================
-// 🔑 Download Helpers
+// 🔧 STICKER CONVERSION - FIXED FOR PHONE
 // ==========================================
-async function downloadYoutubeAudio(youtubeUrl) {
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${youtubeUrl}"`, { timeout: 30000 });
-        const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) return url;
-    } catch (e) {}
+// KEY FIX: WhatsApp phone needs proper WebP with correct metadata
+// Problem: Sharp eken generate karana WebP eka phone ekata readable wenne na
+// Solution: Explicit format + metadata strip + proper channels
+async function convertToSticker(buffer, isVideo = false) {
+    if (!sharp) {
+        console.log('❌ Sharp not available');
+        return null;
+    }
 
     try {
+        if (isVideo) {
+            // ===== VIDEO → ANIMATED WEBP STICKER =====
+            const metadata = await sharp(buffer, { animated: true }).metadata();
+            const totalFrames = metadata.pages || 1;
+            
+            // WhatsApp sticker limits: max 1MB, 512x512, max 5 sec
+            const maxFrames = Math.min(totalFrames, 60);
+
+            let result = await sharp(buffer, {
+                animated: true,
+                limitInputPixels: false,
+                pages: maxFrames
+            })
+            .resize(512, 512, {
+                fit: 'contain',
+                background: { r: 0, g: 0, b: 0, alpha: 0 }
+            })
+            // Flatten to ensure alpha channel
+            .webp({
+                quality: 55,
+                effort: 4,
+                loop: 0,
+                delay: 80,
+                lossless: false
+            })
+            .toBuffer();
+
+            // Size check - reduce if too big
+            if (result.length > 900 * 1024) {
+                console.log('⚠️ Sticker too large, reducing...');
+                result = await sharp(buffer, {
+                    animated: true,
+                    limitInputPixels: false,
+                    pages: Math.min(totalFrames, 30)
+                })
+                .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .webp({ quality: 35, effort: 4, delay: 100, loop: 0 })
+                .toBuffer();
+            }
+
+            return result;
+
+        } else {
+            // ===== IMAGE → STATIC WEBP STICKER =====
+            // CRITICAL FIX: Ensure proper format with explicit RGBA
+            const result = await sharp(buffer, { limitInputPixels: false })
+                .resize(512, 512, {
+                    fit: 'contain',
+                    background: { r: 0, g: 0, b: 0, alpha: 0 },
+                    withoutEnlargement: false
+                })
+                .ensureAlpha() // Force RGBA channel
+                .webp({
+                    quality: 90,
+                    effort: 4,
+                    lossless: false
+                })
+                .toBuffer();
+
+            return result;
+        }
+    } catch (e) {
+        console.error('Sticker conversion error:', e.message);
+        return null;
+    }
+}
+
+// ==========================================
+// 🔧 TTS Conversion (Already Working)
+// ==========================================
+async function convertTtsToOpus(mp3Buffer) {
+    try {
+        const tmpDir = path.join(__dirname, 'tmp');
+        await fs.ensureDir(tmpDir);
+        const tmpMp3 = path.join(tmpDir, `tts_${Date.now()}.mp3`);
+        const tmpOgg = path.join(tmpDir, `tts_${Date.now()}.ogg`);
+        await fs.writeFile(tmpMp3, mp3Buffer);
+
+        await new Promise((resolve, reject) => {
+            exec(
+                `ffmpeg -i "${tmpMp3}" -c:a libopus -b:a 48k -ar 48000 -ac 1 -vbr on -compression_level 10 -frame_duration 60 -application voip "${tmpOgg}" -y`,
+                { timeout: 30000 },
+                (error) => error ? reject(error) : resolve()
+            );
+        });
+
+        const oggBuffer = await fs.readFile(tmpOgg);
+        await fs.remove(tmpMp3).catch(() => {});
+        await fs.remove(tmpOgg).catch(() => {});
+        return oggBuffer;
+    } catch (e) {
+        console.error('TTS conversion error:', e.message);
+        return null;
+    }
+}
+
+// ==========================================
+// 🌐 MEDIA DOWNLOAD - NIM API + Fallbacks
+// ==========================================
+
+// 🎵 Song/YT Audio
+async function getYoutubeAudio(url) {
+    // Try 1: NIM API
+    try {
+        const apiUrl = `${NIM_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
+        const res = await axios.get(apiUrl, { timeout: 30000 });
+        const dl = res.data?.result?.download_url || res.data?.result?.url || res.data?.data?.url || res.data?.url;
+        if (dl && dl.startsWith('http')) {
+            console.log('[YT-AUDIO] ✅ NIM API');
+            return dl;
+        }
+    } catch (e) { console.log('[YT-AUDIO] NIM failed:', e.message); }
+
+    // Try 2: yt-dlp
+    try {
+        const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${url}"`, { timeout: 30000 });
+        const dl = stdout.trim().split('\n')[0];
+        if (dl && dl.startsWith('http')) {
+            console.log('[YT-AUDIO] ✅ yt-dlp');
+            return dl;
+        }
+    } catch (e) {}
+
+    // Try 3: ytdl-core
+    try {
         const ytdl = require('@distube/ytdl-core');
-        const info = await ytdl.getInfo(youtubeUrl);
+        const info = await ytdl.getInfo(url);
         const format = ytdl.chooseFormat(info, { quality: 'highestaudio', filter: 'audioonly' });
         if (format?.url) return format.url;
     } catch (e) {}
@@ -207,136 +313,202 @@ async function downloadYoutubeAudio(youtubeUrl) {
     return null;
 }
 
-// ==========================================
-// 🔑 YouTube Video Download via NIM API
-// ==========================================
-async function downloadYoutubeVideo(youtubeUrl) {
+// 🎬 YT Video with quality
+async function getYoutubeVideo(url, quality = '720') {
+    // Try 1: NIM API
     try {
-        const apiUrl = `https://api.zanta-mini.store/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 30000 });
-        const videoUrl = response.data?.result?.url 
-                      || response.data?.data?.url 
-                      || response.data?.url 
-                      || response.data?.result?.download_url
-                      || response.data?.downloadUrl;
-        if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[YT VIDEO] ✅ NIM API succeeded');
-            return videoUrl;
+        const apiUrl = `${NIM_API_BASE}/api/ytmp4?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}&quality=${quality}`;
+        const res = await axios.get(apiUrl, { timeout: 30000 });
+        const dl = res.data?.result?.download_url || res.data?.result?.url || res.data?.data?.url || res.data?.url;
+        if (dl && dl.startsWith('http')) {
+            console.log('[YT-VIDEO] ✅ NIM API');
+            return dl;
         }
-    } catch (e) {
-        console.log('[YT VIDEO] NIM API failed:', e.message);
-    }
+    } catch (e) { console.log('[YT-VIDEO] NIM failed:', e.message); }
 
+    // Try 2: yt-dlp with quality
     try {
-        const { stdout } = await execPromise(`yt-dlp --get-url -f "best[ext=mp4]/best" "${youtubeUrl}"`, { timeout: 30000 });
-        const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) {
-            console.log('[YT VIDEO] ✅ yt-dlp succeeded');
-            return url;
+        const fmt = quality === '1080' ? 'best[height<=1080]' : quality === '720' ? 'best[height<=720]' : 'best[height<=480]';
+        const { stdout } = await execPromise(`yt-dlp --get-url -f "${fmt}[ext=mp4]/best[ext=mp4]" "${url}"`, { timeout: 30000 });
+        const dl = stdout.trim().split('\n')[0];
+        if (dl && dl.startsWith('http')) {
+            console.log('[YT-VIDEO] ✅ yt-dlp');
+            return dl;
         }
-    } catch (e) {
-        console.log('[YT VIDEO] yt-dlp failed');
-    }
+    } catch (e) {}
 
+    // Try 3: ytdl-core
     try {
         const ytdl = require('@distube/ytdl-core');
-        const info = await ytdl.getInfo(youtubeUrl);
+        const info = await ytdl.getInfo(url);
         const format = ytdl.chooseFormat(info, { quality: 'highestvideo', filter: 'videoandaudio' });
-        if (format?.url) {
-            console.log('[YT VIDEO] ✅ ytdl-core succeeded');
-            return format.url;
-        }
-    } catch (e) {
-        console.log('[YT VIDEO] ytdl-core failed:', e.message);
-    }
-
-    return null;
-}
-
-// ==========================================
-// 🔑 TikTok Download via NIM API
-// ==========================================
-async function downloadTikTok(tiktokUrl) {
-    try {
-        const apiUrl = `https://api.zanta-mini.store/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 30000 });
-        const videoUrl = response.data?.result?.video 
-                      || response.data?.result?.url
-                      || response.data?.data?.video 
-                      || response.data?.data?.url 
-                      || response.data?.video 
-                      || response.data?.url 
-                      || response.data?.result?.download_url
-                      || response.data?.downloadUrl
-                      || response.data?.result?.play;
-        if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[TIKTOK] ✅ NIM API succeeded');
-            return videoUrl;
-        }
-    } catch (e) {
-        console.log('[TIKTOK] NIM API failed:', e.message);
-    }
-
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url "${tiktokUrl}"`, { timeout: 30000 });
-        const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) {
-            console.log('[TIKTOK] ✅ yt-dlp succeeded');
-            return url;
-        }
-    } catch (e) {
-        console.log('[TIKTOK] yt-dlp failed');
-    }
-
-    try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 20000 });
-        const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url;
-        if (url) {
-            console.log('[TIKTOK] ✅ siputzx API succeeded');
-            return url;
-        }
-    } catch (e) {
-        console.log('[TIKTOK] siputzx API failed');
-    }
-
-    return null;
-}
-
-async function downloadFacebook(fbUrl) {
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url "${fbUrl}"`, { timeout: 30000 });
-        const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) return url;
-    } catch (e) {}
-
-    try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`, { timeout: 20000 });
-        const url = apiRes.data?.data?.hd || apiRes.data?.data?.sd || apiRes.data?.url;
-        if (url) return url;
+        if (format?.url) return format.url;
     } catch (e) {}
 
     return null;
 }
 
-async function downloadInstagram(igUrl) {
+// 🎬 TikTok
+async function getTikTok(url, quality = 'hd') {
+    // Try 1: NIM API
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(igUrl)}`, { timeout: 25000 });
-        const mediaData = apiRes.data?.data;
-        if (mediaData && mediaData.length > 0) {
-            return mediaData;
+        const apiUrl = `${NIM_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
+        const res = await axios.get(apiUrl, { timeout: 30000 });
+        const data = res.data?.result || res.data?.data || res.data;
+        const dl = quality === 'hd'
+            ? (data?.hd || data?.video_hd || data?.video || data?.url || data?.download_url || data?.play)
+            : (data?.sd || data?.video_sd || data?.video || data?.url || data?.download_url || data?.play);
+        if (dl && typeof dl === 'string' && dl.startsWith('http')) {
+            console.log('[TIKTOK] ✅ NIM API');
+            return dl;
+        }
+    } catch (e) { console.log('[TIKTOK] NIM failed:', e.message); }
+
+    // Try 2: tikwm
+    try {
+        const res = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, { timeout: 25000 });
+        const dl = quality === 'hd' ? (res.data?.data?.hdplay || res.data?.data?.play) : res.data?.data?.play;
+        if (dl) {
+            return dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`;
         }
     } catch (e) {}
+
+    // Try 3: yt-dlp
+    try {
+        const { stdout } = await execPromise(`yt-dlp --get-url "${url}"`, { timeout: 30000 });
+        const dl = stdout.trim().split('\n')[0];
+        if (dl && dl.startsWith('http')) return dl;
+    } catch (e) {}
+
     return null;
 }
 
+// 📘 Facebook
+async function getFacebook(url) {
+    // Try 1: NIM API
+    try {
+        const apiUrl = `${NIM_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
+        const res = await axios.get(apiUrl, { timeout: 30000 });
+        const dl = res.data?.result?.hd || res.data?.result?.sd || res.data?.result?.url || res.data?.data?.url || res.data?.url;
+        if (dl && dl.startsWith('http')) {
+            console.log('[FB] ✅ NIM API');
+            return dl;
+        }
+    } catch (e) { console.log('[FB] NIM failed:', e.message); }
+
+    // Try 2: yt-dlp
+    try {
+        const { stdout } = await execPromise(`yt-dlp --get-url "${url}"`, { timeout: 30000 });
+        const dl = stdout.trim().split('\n')[0];
+        if (dl && dl.startsWith('http')) return dl;
+    } catch (e) {}
+
+    // Try 3: siputzx
+    try {
+        const res = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+        const dl = res.data?.data?.hd || res.data?.data?.sd || res.data?.url;
+        if (dl) return dl;
+    } catch (e) {}
+
+    return null;
+}
+
+// 📸 Instagram
+async function getInstagram(url) {
+    // Try 1: NIM API
+    try {
+        const apiUrl = `${NIM_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(url)}`;
+        const res = await axios.get(apiUrl, { timeout: 30000 });
+        const data = res.data?.result || res.data?.data;
+        if (Array.isArray(data) && data.length > 0) {
+            console.log('[IG] ✅ NIM API (array)');
+            return data.map(m => ({
+                url: m.url || m.download_url || m.link || m.src,
+                type: (m.type || '').toLowerCase().includes('video') || (m.url || '').includes('.mp4') ? 'video' : 'image'
+            }));
+        }
+        if (data?.url) {
+            return [{ url: data.url, type: (data.type || '').includes('video') ? 'video' : 'image' }];
+        }
+    } catch (e) { console.log('[IG] NIM failed:', e.message); }
+
+    // Try 2: siputzx
+    try {
+        const res = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(url)}`, { timeout: 25000 });
+        if (res.data?.data && Array.isArray(res.data.data)) {
+            return res.data.data.map(m => ({
+                url: m.url,
+                type: (m.type || '').includes('video') ? 'video' : 'image'
+            }));
+        }
+    } catch (e) {}
+
+    return null;
+}
+
+// 🎬 Movie
+async function getMovie(query) {
+    // Try 1: NIM API
+    try {
+        const apiUrl = `${NIM_API_BASE}/api/movie?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
+        const res = await axios.get(apiUrl, { timeout: 40000 });
+        const data = res.data?.result || res.data?.data || res.data;
+        
+        if (data) {
+            if (Array.isArray(data) && data.length > 0) {
+                console.log('[MOVIE] ✅ NIM API (array)');
+                return data.map(m => ({
+                    title: m.title || m.name || 'Unknown',
+                    year: m.year,
+                    quality: m.quality || 'HD',
+                    size: m.size,
+                    url: m.url || m.download_url || m.link,
+                    poster: m.poster || m.image || m.thumbnail,
+                    rating: m.rating
+                })).filter(m => m.url);
+            }
+            if (data.title || data.name) {
+                return [{
+                    title: data.title || data.name,
+                    year: data.year,
+                    quality: data.quality || 'HD',
+                    size: data.size,
+                    url: data.url || data.download_url || data.link,
+                    poster: data.poster || data.image,
+                    rating: data.rating
+                }];
+            }
+        }
+    } catch (e) { console.log('[MOVIE] NIM failed:', e.message); }
+
+    // Try 2: YTS
+    try {
+        const res = await axios.get(`https://yts.mx/api/v2/list_movies.json?query_term=${encodeURIComponent(query)}&limit=5`, { timeout: 20000 });
+        const movies = res.data?.data?.movies;
+        if (movies && movies.length > 0) {
+            console.log('[MOVIE] ✅ YTS');
+            return movies.map(m => ({
+                title: m.title,
+                year: m.year,
+                quality: m.torrents?.[0]?.quality || 'HD',
+                size: m.torrents?.[0]?.size || 'N/A',
+                url: m.torrents?.[0]?.url || m.url,
+                poster: m.medium_cover_image,
+                rating: m.rating
+            }));
+        }
+    } catch (e) {}
+
+    return null;
+}
+
+// 🤖 AI
 async function askAI(query) {
     const apis = [
+        { url: `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response },
         { url: `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`, extract: (d) => d?.result || d?.gpt || d?.answer },
         { url: `https://api.affiliateplus.xyz/api/gpt?query=${encodeURIComponent(query)}`, extract: (d) => d?.reply || d?.response },
-        { url: `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response },
-        { url: `https://delirius-apiofc.vercel.app/ai/gpt4?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response }
     ];
-
     for (const api of apis) {
         try {
             const res = await axios.get(api.url, { timeout: 15000 });
@@ -351,9 +523,7 @@ async function generateAIImage(prompt) {
     const apis = [
         { url: `https://api.siputzx.my.id/api/ai/stable-diffusion?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.data?.url || d?.result || d?.url },
         { url: `https://api.nekosia.cat/api/v1/images/text2image?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.image?.url || d?.url },
-        { url: `https://api.siputzx.my.id/api/ai/imagen?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.data?.url || d?.result }
     ];
-
     for (const api of apis) {
         try {
             const res = await axios.get(api.url, { timeout: 30000 });
@@ -367,138 +537,18 @@ async function generateAIImage(prompt) {
 async function generateFakeChat(name, message) {
     const apis = [
         `https://api.siputzx.my.id/api/m/fakechat?name=${encodeURIComponent(name)}&message=${encodeURIComponent(message)}`,
-        `https://api.siputzx.my.id/api/m/fakechat/iphone?name=${encodeURIComponent(name)}&message=${encodeURIComponent(message)}`,
-        `https://api.siputzx.my.id/api/m/fakechat/android?name=${encodeURIComponent(name)}&message=${encodeURIComponent(message)}`
     ];
-
     for (const apiUrl of apis) {
         try {
             const res = await axios.get(apiUrl, { timeout: 20000, responseType: 'arraybuffer' });
-            if (res.data && res.data.length > 1000) {
-                return Buffer.from(res.data);
-            }
+            if (res.data && res.data.length > 1000) return Buffer.from(res.data);
         } catch (e) {}
     }
     return null;
 }
 
 // ==========================================
-// 🔧 FIXED: Sticker Conversion - Phone Compatible
-// ==========================================
-async function convertToSticker(buffer, isVideo = false) {
-    try {
-        if (!sharp) {
-            console.log('⚠️ Sharp not available, returning raw buffer');
-            return buffer;
-        }
-
-        // Determine if it's animated (GIF/video)
-        const isAnimated = isVideo;
-
-        if (isAnimated) {
-            // For video/GIF → animated webp sticker
-            // Extract frames using sharp with animated: true
-            const animated = sharp(buffer, { 
-                animated: true,
-                limitInputPixels: false
-            });
-
-            const metadata = await animated.metadata();
-            
-            // Limit to reasonable frames for WhatsApp (max 100 frames)
-            const maxFrames = 100;
-            const pageHeight = metadata.pageHeight || metadata.height;
-            const totalFrames = metadata.pages || 1;
-            const framesToUse = Math.min(totalFrames, maxFrames);
-
-            return await sharp(buffer, {
-                animated: true,
-                limitInputPixels: false
-            })
-                .resize(512, 512, {
-                    fit: 'contain',
-                    background: { r: 0, g: 0, b: 0, alpha: 0 },
-                    withoutEnlargement: false
-                })
-                .webp({
-                    quality: 75,
-                    effort: 4,
-                    lossless: false,
-                    nearLossless: false,
-                    smartSubsample: true,
-                    loop: 0,
-                    delay: 100
-                })
-                .toBuffer();
-        } else {
-            // For static image → static webp sticker
-            return await sharp(buffer, {
-                limitInputPixels: false
-            })
-                .resize(512, 512, {
-                    fit: 'contain',
-                    background: { r: 0, g: 0, b: 0, alpha: 0 },
-                    withoutEnlargement: false
-                })
-                .webp({
-                    quality: 85,
-                    effort: 4,
-                    lossless: false
-                })
-                .toBuffer();
-        }
-    } catch (e) {
-        console.error('Sticker conversion error:', e.message);
-        return buffer;
-    }
-}
-
-// ==========================================
-// 🔧 FIXED: TTS Audio Conversion - Phone Compatible
-// ==========================================
-async function convertTtsToOpus(mp3Buffer) {
-    try {
-        // Write temp mp3 file
-        const tmpDir = path.join(__dirname, 'tmp');
-        await fs.ensureDir(tmpDir);
-        
-        const tmpMp3 = path.join(tmpDir, `tts_${Date.now()}.mp3`);
-        const tmpOgg = path.join(tmpDir, `tts_${Date.now()}.ogg`);
-        
-        await fs.writeFile(tmpMp3, mp3Buffer);
-
-        // Convert to OGG Opus using ffmpeg (WhatsApp voice note format)
-        await new Promise((resolve, reject) => {
-            exec(
-                `ffmpeg -i "${tmpMp3}" -c:a libopus -b:a 48k -ar 48000 -ac 1 -vbr on -compression_level 10 -frame_duration 60 -application voip "${tmpOgg}" -y`,
-                { timeout: 30000 },
-                (error, stdout, stderr) => {
-                    if (error) {
-                        console.error('ffmpeg error:', stderr || error.message);
-                        reject(error);
-                    } else {
-                        resolve();
-                    }
-                }
-            );
-        });
-
-        // Read converted ogg
-        const oggBuffer = await fs.readFile(tmpOgg);
-
-        // Cleanup
-        await fs.remove(tmpMp3).catch(() => {});
-        await fs.remove(tmpOgg).catch(() => {});
-
-        return oggBuffer;
-    } catch (e) {
-        console.error('TTS conversion error:', e.message);
-        return null;
-    }
-}
-
-// ==========================================
-// MongoDB Auth State
+// MongoDB Auth
 // ==========================================
 async function useMongoDBAuthState(number) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
@@ -512,7 +562,6 @@ async function useMongoDBAuthState(number) {
         try {
             if (dbData.creds && typeof dbData.creds === 'object' && Object.keys(dbData.creds).length > 0) {
                 await fs.writeJson(credsPath, dbData.creds, { spaces: 2 });
-                console.log(`✅ Loaded session from DB for ${sanitizedNumber}`);
             } else {
                 await Session.deleteOne({ number: sanitizedNumber });
                 dbData = null;
@@ -530,7 +579,6 @@ async function useMongoDBAuthState(number) {
         try {
             await fs.ensureDir(sessionDir);
             await saveCreds();
-            
             if (await fs.pathExists(credsPath)) {
                 try {
                     const rawData = await fs.readFile(credsPath, 'utf8');
@@ -539,25 +587,111 @@ async function useMongoDBAuthState(number) {
                         if (credsData && typeof credsData === 'object' && Object.keys(credsData).length > 0) {
                             await Session.findOneAndUpdate(
                                 { number: sanitizedNumber },
-                                { 
-                                    creds: credsData, 
-                                    updatedAt: new Date(),
-                                    lastSeen: new Date()
-                                },
+                                { creds: credsData, updatedAt: new Date(), lastSeen: new Date() },
                                 { upsert: true, new: true }
                             );
                         }
                     }
-                } catch (e) {
-                    console.error(`❌ Error saving creds:`, e.message);
-                }
+                } catch (e) {}
             }
-        } catch (e) {
-            console.error(`❌ Error in enhancedSaveCreds:`, e.message);
-        }
+        } catch (e) {}
     };
 
     return { state, saveCreds: enhancedSaveCreds };
+}
+
+// ==========================================
+// Handle Pending Media (Quality Selection)
+// ==========================================
+async function handlePendingMedia(socket, sender, msg, reply, pending, choice, channelInfo) {
+    const P = pending.type;
+
+    if (P === 'song' || P === 'youtube') {
+        const url = P === 'song' ? pending.video.url : pending.url;
+        const title = P === 'song' ? pending.video.title : 'YouTube';
+
+        await reply(`📥 Downloading (option ${choice})... ⏳` + FOOTER);
+
+        if (choice === '1') {
+            // MP3
+            const audioUrl = await getYoutubeAudio(url);
+            if (!audioUrl) return reply(`❌ Audio download failed!` + FOOTER);
+
+            try {
+                await socket.sendMessage(sender, {
+                    audio: { url: audioUrl },
+                    mimetype: 'audio/mpeg',
+                    ptt: false,
+                    fileName: `${title}.mp3`,
+                    contextInfo: channelInfo
+                }, { quoted: msg });
+            } catch (e) {
+                await reply(`❌ Send failed: ${e.message}` + FOOTER);
+            }
+        } else {
+            // Video quality
+            const quality = choice === '2' ? '360' : choice === '3' ? '720' : '1080';
+            const videoUrl = await getYoutubeVideo(url, quality);
+            if (!videoUrl) return reply(`❌ Video download failed!` + FOOTER);
+
+            try {
+                await socket.sendMessage(sender, {
+                    video: { url: videoUrl },
+                    caption: `🎬 *${title}*\n📺 ${quality}p` + FOOTER,
+                    contextInfo: channelInfo
+                }, { quoted: msg });
+            } catch (e) {
+                await reply(`❌ Send failed: ${e.message}` + FOOTER);
+            }
+        }
+    } 
+    else if (P === 'tiktok') {
+        await reply(`📥 Downloading (option ${choice})... ⏳` + FOOTER);
+
+        if (choice === '3') {
+            // Audio only
+            const videoUrl = await getTikTok(pending.url, 'hd');
+            if (!videoUrl) return reply(`❌ Download failed!` + FOOTER);
+            
+            await socket.sendMessage(sender, {
+                video: { url: videoUrl },
+                caption: `🎬 *TikTok*\n⚠️ Video only (audio extract not supported)` + FOOTER,
+                contextInfo: channelInfo
+            }, { quoted: msg });
+        } else {
+            const quality = choice === '1' ? 'hd' : 'sd';
+            const videoUrl = await getTikTok(pending.url, quality);
+            if (!videoUrl) return reply(`❌ Download failed!` + FOOTER);
+
+            await socket.sendMessage(sender, {
+                video: { url: videoUrl },
+                caption: `🎬 *TikTok ${quality.toUpperCase()}*` + FOOTER,
+                contextInfo: channelInfo
+            }, { quoted: msg });
+        }
+    }
+    else if (P === 'movie') {
+        const idx = parseInt(choice) - 1;
+        const movie = pending.movies[idx];
+        if (!movie) return reply(`❌ Invalid selection!` + FOOTER);
+
+        await reply(`📥 Downloading: *${movie.title}*... ⏳` + FOOTER);
+
+        if (!movie.url) return reply(`❌ No download link for this movie!` + FOOTER);
+
+        try {
+            // Send as document (movie files are large)
+            await socket.sendMessage(sender, {
+                document: { url: movie.url },
+                mimetype: 'video/mp4',
+                fileName: `${movie.title}${movie.year ? ` (${movie.year})` : ''}.mp4`,
+                caption: `🎬 *${movie.title}*\n📺 ${movie.quality || 'HD'}\n💾 ${movie.size || 'N/A'}` + FOOTER,
+                contextInfo: channelInfo
+            }, { quoted: msg });
+        } catch (e) {
+            await reply(`❌ Send failed: ${e.message}\n\n💡 Link: ${movie.url}` + FOOTER);
+        }
+    }
 }
 
 // ==========================================
@@ -565,107 +699,72 @@ async function useMongoDBAuthState(number) {
 // ==========================================
 function setupCommandHandlers(socket, number) {
 
-    // ==========================================
-    // Anti-Delete handler
-    // ==========================================
+    // Anti-Delete Handler
     socket.ev.on('messages.update', async (updates) => {
         try {
             for (const update of updates) {
                 const { key, update: updateData } = update;
-                
                 const protocolMsg = updateData?.protocolMessage || updateData?.message?.protocolMessage;
                 let revokedId = null;
-                
+
                 if (protocolMsg) {
                     if (protocolMsg.type === 0 || protocolMsg.type === 'REVOKE' || protocolMsg.key) {
                         revokedId = protocolMsg.key?.id || protocolMsg.stanzaId;
                     }
                 }
-                
-                if (!revokedId && updateData?.messageStubType === 1) {
-                    revokedId = key?.id;
-                }
-                
-                if (!revokedId && updateData?.message === null && key?.id) {
-                    revokedId = key.id;
-                }
-                
+                if (!revokedId && updateData?.messageStubType === 1) revokedId = key?.id;
+                if (!revokedId && updateData?.message === null && key?.id) revokedId = key.id;
                 if (!revokedId) continue;
 
                 let cachedMsg = messageCache.get(revokedId);
                 if (!cachedMsg) {
-                    for (const [cacheKey, value] of messageCache) {
-                        if (value?.key?.id === revokedId || value?.key?.stanzaId === revokedId) {
-                            cachedMsg = value;
+                    for (const [k, v] of messageCache) {
+                        if (v?.key?.id === revokedId || v?.key?.stanzaId === revokedId) {
+                            cachedMsg = v;
                             break;
                         }
                     }
                 }
-
                 if (!cachedMsg) continue;
 
                 const chatJid = cachedMsg.key.remoteJid;
                 const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
-                const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
+                const messageText = getMessageBody(cachedMsg) || '[Media]';
 
                 deletedMessages.set(chatJid, {
-                    sender: senderJid,
-                    text: messageText,
+                    sender: senderJid, text: messageText,
                     time: new Date().toLocaleString(),
-                    originalMsg: cachedMsg,
-                    keyId: revokedId,
-                    timestamp: Date.now()
+                    originalMsg: cachedMsg, keyId: revokedId, timestamp: Date.now()
                 });
-
-                console.log(`[ANTI-DELETE] ✅ Captured: ${senderJid} - ${messageText.substring(0, 50)}`);
 
                 let nodeleteStatus = chatNodelete.get(chatJid);
                 if (nodeleteStatus === undefined || nodeleteStatus === null) {
-                    try { 
-                        nodeleteStatus = await get(`NODELETE_${chatJid}`, number); 
-                    } catch (e) {}
+                    try { nodeleteStatus = await get(`NODELETE_${chatJid}`, number); } catch (e) {}
                     if (!nodeleteStatus) {
-                        try { 
+                        try {
                             const cleanKey = chatJid.replace(/[^0-9]/g, '');
-                            nodeleteStatus = await get(`NODELETE_${cleanKey}`, number); 
+                            nodeleteStatus = await get(`NODELETE_${cleanKey}`, number);
                         } catch (e) {}
                     }
                     nodeleteStatus = nodeleteStatus || 'off';
                     chatNodelete.set(chatJid, nodeleteStatus);
                 }
-                
+
                 if (nodeleteStatus === 'on') {
                     try {
                         const senderName = senderJid.split('@')[0];
-                        const resendText = `🗑️ *DELETED MESSAGE DETECTED!*
-
-👤 *Sender:* @${senderName}
-⏰ *Time:* ${new Date().toLocaleString()}
-💬 *Message:*
-${messageText}
-
-> _Auto-recovered by NIM BOT_${FOOTER}`;
-
                         await sendWithTyping(socket, chatJid, {
-                            text: resendText,
+                            text: `🗑️ *DELETED MESSAGE DETECTED!*\n\n👤 *Sender:* @${senderName}\n⏰ *Time:* ${new Date().toLocaleString()}\n💬 *Message:*\n${messageText}\n\n> _Auto-recovered_${FOOTER}`,
                             mentions: [senderJid],
                             contextInfo: getChannelContext()
                         });
-
-                        console.log(`[NODELETE] ✅ Auto-resent deleted msg in ${chatJid}`);
-                    } catch (e) {
-                        console.log(`[NODELETE] ❌ Error:`, e.message);
-                    }
+                    } catch (e) {}
                 }
             }
-        } catch (e) {
-            console.error('[ANTI-DELETE] Handler error:', e.message);
-        }
+        } catch (e) {}
     });
 
-    // ==========================================
-    // Main message handler
-    // ==========================================
+    // Main handler
     socket.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg) return;
@@ -673,7 +772,6 @@ ${messageText}
         if (msg.key && msg.key.id) {
             messageCache.set(msg.key.id, msg);
             if (msg.key.stanzaId) messageCache.set(msg.key.stanzaId, msg);
-            
             if (messageCache.size > 500) {
                 const keys = messageCache.keys();
                 for (let i = 0; i < 250; i++) {
@@ -686,6 +784,7 @@ ${messageText}
         if (!msg.message) return;
 
         const sender = msg.key.remoteJid;
+        const senderJid = msg.key.participant || sender;
         const body = getMessageBody(msg);
         if (!body) return;
 
@@ -711,43 +810,57 @@ ${messageText}
                     contextInfo: { ...(content.contextInfo || {}), ...channelInfo }
                 };
             }
-            
             const sentMsg = await socket.sendMessage(sender, messagePayload, { quoted: quotedMsg });
-
             if (reactEmoji && isCommand) {
                 try {
-                    const emojis = ['✅', '👌', '🔥', '⚡', '🔦', '💫', '✔️'];
-                    const emoji = emojis[Math.floor(Math.random() * emojis.length)];
-                    await socket.sendMessage(sender, {
-                        react: { text: emoji, key: msg.key }
-                    });
+                    const emojis = ['✅', '👌', '🔥', '⚡'];
+                    await socket.sendMessage(sender, { react: { text: emojis[Math.floor(Math.random() * emojis.length)], key: msg.key } });
                 } catch (e) {}
             }
-
             return sentMsg;
         };
 
-        // Per-Group Anti-Link Check
+        // ==========================================
+        // AUTO-SAVE
+        // ==========================================
+        if (!msg.key.fromMe && !sender.endsWith('@g.us') && !sender.endsWith('@broadcast') && !sender.endsWith('@newsletter')) {
+            try {
+                const autoSaveStatus = await get('AUTOSAVE_STATUS', number);
+                if (autoSaveStatus === 'on' || autoSaveStatus === 'true') {
+                    const autoSaveName = await get('AUTOSAVE_NAME', number) || 'Saved Contact';
+                    
+                    try {
+                        // addOrEditContact saves contact in WhatsApp phonebook
+                        await socket.addOrEditContact(sender, {
+                            firstName: autoSaveName
+                        });
+                        console.log(`[AUTOSAVE] ✅ Saved ${sender} as "${autoSaveName}"`);
+                    } catch (saveErr) {
+                        // Contact may already exist, which is fine
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // Anti-Link
         if (sender.endsWith('@g.us') && !msg.key.fromMe) {
             try {
                 let status = groupAntiLink.get(sender);
-                
                 if (status === undefined || status === null) {
                     let dbStatus = null;
                     try { dbStatus = await get(`ANTILINK_${sender}`, number); } catch (e) {}
                     if (!dbStatus) {
-                        try { 
+                        try {
                             const cleanKey = sender.replace(/[^0-9]/g, '');
-                            dbStatus = await get(`ANTILINK_${cleanKey}`, number); 
+                            dbStatus = await get(`ANTILINK_${cleanKey}`, number);
                         } catch (e) {}
                     }
                     status = dbStatus || 'off';
                     groupAntiLink.set(sender, status);
                 }
-                
+
                 if (status === 'on') {
                     const linkRegex = /(chat\.whatsapp\.com|whatsapp\.com\/channel|wa\.me\/|t\.me\/|bit\.ly|tinyurl|http:\/\/|https:\/\/)/i;
-                    
                     if (linkRegex.test(body)) {
                         let isAdmin = false;
                         try {
@@ -755,17 +868,13 @@ ${messageText}
                             const participant = meta.participants.find(p => p.id === msg.key.participant);
                             isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
                         } catch (e) {}
-                        
+
                         if (!isAdmin) {
                             try {
                                 await socket.sendMessage(sender, { delete: msg.key });
                                 const userName = (msg.key.participant || '').split('@')[0];
                                 await socket.sendMessage(sender, {
-                                    text: `🚫 *LINK DETECTED!*
-
-👤 @${userName}
-⚡️ Links are not allowed in this group!
-🔗 *Anti-Link: ON*` + FOOTER,
+                                    text: `🚫 *LINK DETECTED!*\n\n👤 @${userName}\n⚡️ Links not allowed!` + FOOTER,
                                     mentions: [msg.key.participant],
                                     contextInfo: channelInfo
                                 });
@@ -776,165 +885,67 @@ ${messageText}
             } catch (e) {}
         }
 
-        // MENU REPLY HANDLER
-        const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
-        const quotedStanzaId = contextInfo?.stanzaId || '';
-        
-        let quotedText = '';
-        const qm = contextInfo?.quotedMessage || {};
-        if (qm.conversation) {
-            quotedText = qm.conversation;
-        } else if (qm.extendedTextMessage?.text) {
-            quotedText = qm.extendedTextMessage.text;
-        } else if (qm.imageMessage?.caption) {
-            quotedText = qm.imageMessage.caption;
-        } else if (qm.videoMessage?.caption) {
-            quotedText = qm.videoMessage.caption;
+        // ==========================================
+        // PENDING MEDIA REPLY (Quality Selection)
+        // ==========================================
+        if (!isCommand && pendingMediaRequests.has(sender)) {
+            const pending = pendingMediaRequests.get(sender);
+            const numReply = body.trim();
+            
+            if (['1', '2', '3', '4', '5'].includes(numReply)) {
+                if (Date.now() - pending.timestamp > 5 * 60 * 1000) {
+                    pendingMediaRequests.delete(sender);
+                } else {
+                    try {
+                        pendingMediaRequests.delete(sender);
+                        await handlePendingMedia(socket, sender, msg, reply, pending, numReply, channelInfo);
+                        return;
+                    } catch (e) {
+                        console.error('Pending media error:', e);
+                        pendingMediaRequests.delete(sender);
+                        await reply(`❌ ${e.message}` + FOOTER);
+                    }
+                }
+            }
         }
 
-        const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
-        
-        const hasMenuKeywords = quotedText.includes('𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨') || 
-                               quotedText.includes('MENU CATEGORIES') ||
-                               quotedText.includes('Reply to this message with a number') ||
-                               (quotedText.includes('DOWNLOAD COMMANDS') && quotedText.includes('SETTINGS COMMANDS')) ||
-                               (quotedText.includes('1️⃣') && quotedText.includes('2️⃣') && quotedText.includes('3️⃣')) ||
-                               (quotedText.includes('Reply 0') && quotedText.includes('Main Menu'));
+        // Menu Reply Handler
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+        const quotedStanzaId = contextInfo?.stanzaId || '';
+        let quotedText = '';
+        const qm = contextInfo?.quotedMessage || {};
+        if (qm.conversation) quotedText = qm.conversation;
+        else if (qm.extendedTextMessage?.text) quotedText = qm.extendedTextMessage.text;
+        else if (qm.imageMessage?.caption) quotedText = qm.imageMessage.caption;
+        else if (qm.videoMessage?.caption) quotedText = qm.videoMessage.caption;
 
+        const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
+        const hasMenuKeywords = quotedText.includes('𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨') || 
+                               quotedText.includes('Reply to this message with a number') ||
+                               (quotedText.includes('1️⃣') && quotedText.includes('2️⃣'));
         const isMenuReply = isBotMenuMessage || hasMenuKeywords;
 
         if (!isCommand && body.match(/^[1-7]$/) && isMenuReply) {
             const categoryNum = parseInt(body);
             let categoryMenu = '';
-
             switch(categoryNum) {
-                case 1:
-                    categoryMenu = `*╭─\`📥 DOWNLOAD COMMANDS\`┤⭓*
-*┃*
-*┃ 🎵 .song [name]*
-*┃ 🎬 .tt / .tiktok [url]*
-*┃ 🎬 .yt / .youtube [url] [video/audio]*
-*┃ 🎬 .fb / .facebook [url]*
-*┃ 📸 .ig / .instagram [url]*
-*┃ 🔗 .tourl / .url*
-*┃ 📸 .vv / .viewonce*
-*┃ 📸 .vvp / .vvpowner*
-*┃ 📥 .send / .save*
-*╰──────────────────────*
-
-💡 *Reply 0 to go back to Main Menu*`;
-                    break;
-                case 2:
-                    categoryMenu = `*╭─\`⚙️ SETTINGS COMMANDS\`┤⭓*
-*┃*
-*┃ 📋 .settings*
-*┃ 🔐 .mode [public/group/inbox/private]*
-*┃ 👁️ .autoread [all/cmd/off]*
-*┃ 🤖 .autoreply [all/inbox/group/off]*
-*┃ 📷 .autoview [on/off]*
-*┃ ❤️ .autolike [on/off]*
-*┃ 🟢 .alwaysonline [on/off]*
-*┃ 🔗 .antilink [on/off]*
-*┃ 👋 .welcome [on/off]*
-*┃ 🗑️ .nodelet [on/off]*
-*┃ 🔤 .setprefix [prefix]*
-*╰──────────────────────*
-
-💡 *Reply 0 to go back to Main Menu*`;
-                    break;
-                case 3:
-                    categoryMenu = `*╭─\`👑 OWNER COMMANDS\`┤⭓*
-*┃*
-*┃ 👤 .owner*
-*┃ 📋 .settings*
-*┃ 📊 .active*
-*┃ 🔗 .pair [number]*
-*┃ 📞 .vvpowner [number]*
-*┃ 🔤 .setprefix [prefix]*
-*┃ 💾 .setreply [trigger] [response]*
-*┃ 📝 .note save [name] [content]*
-*╰──────────────────────*
-
-💡 *Reply 0 to go back to Main Menu*`;
-                    break;
-                case 4:
-                    categoryMenu = `*╭─\`🛠️ UTILITY COMMANDS\`┤⭓*
-*┃*
-*┃ 🏓 .ping - ⏱️ .runtime*
-*┃ 🕐 .time / .date*
-*┃ 📍 .jid*
-*┃ ❤️ .alive / .status*
-*┃ 🗑️ .remsg / .delete*
-*┃ 👤 .whois / .userinfo*
-*┃ 🔐 .password [length]*
-*┃ 🔗 .short [url]*
-*┃ 📱 .qr [text]*
-*┃ 🌍 .weather [city]*
-*┃ 🌐 .ip [domain]*
-*┃ 🔐 .base64 [enc/dec] [text]*
-*┃ ✅ .check [number]*
-*┃ 💰 .crypto [coin]*
-*╰──────────────────────*
-
-💡 *Reply 0 to go back to Main Menu*`;
-                    break;
-                case 5:
-                    categoryMenu = `*╭─\`🤖 AI & CONVERT\`┤⭓*
-*┃*
-*┃ 🤖 .ai / .gpt [question]*
-*┃ 🌐 .tr [lang]*
-*┃ 🎨 .imagine [prompt]*
-*┃ 📸 .sticker / .s*
-*┃ 📱 .fakechat [name|msg]*
-*┃ 📸 .ss [url]*
-*┃ 🎤 .tts [text]*
-*┃ 🎨 .textimg [text]*
-*╰──────────────────────*
-
-💡 *Reply 0 to go back to Main Menu*`;
-                    break;
-                case 6:
-                    categoryMenu = `*╭─\`👑 GROUP ADMIN\`┤⭓*
-*┃*
-*┃ 📢 .tagall [msg]*
-*┃ 👢 .kick*
-*┃ 👑 .promote*
-*┃ 👤 .demote*
-*┃ 🔇 .mute*
-*┃ 🔊 .unmute*
-*┃ 📊 .ginfo / .groupinfo*
-*┃ 📊 .poll [Q|opt1|opt2]*
-*┃ 📞 .getcontact*
-*╰──────────────────────*
-
-💡 *Reply 0 to go back to Main Menu*`;
-                    break;
-                case 7:
-                    categoryMenu = `*╭─\`🎮 FUN COMMANDS\`┤⭓*
-*┃*
-*┃ 🔥 .quote*
-*┃ 🎲 .dice*
-*┃ 🪙 .flip*
-*┃ 😂 .joke / .sijoke*
-*┃ 🔢 .random [min] [max]*
-*┃ 🎂 .bday set [DD/MM]*
-*╰──────────────────────*
-
-💡 *Reply 0 to go back to Main Menu*`;
-                    break;
-                default:
-                    return;
+                case 1: categoryMenu = `*╭─\`📥 DOWNLOAD COMMANDS\`┤⭓*\n*┃*\n*┃ 🎵 .song [name]*\n*┃ 🎬 .tt [url]*\n*┃ 🎬 .yt [url]*\n*┃ 🎬 .fb [url]*\n*┃ 📸 .ig [url]*\n*┃ 🎬 .movie [name]*\n*┃ 🔗 .tourl*\n*┃ 📸 .vv / .vvp*\n*┃ 📥 .send*\n*╰──────────────────────*\n\n💡 *Reply 0 to go back*`; break;
+                case 2: categoryMenu = `*╭─\`⚙️ SETTINGS COMMANDS\`┤⭓*\n*┃*\n*┃ 📋 .settings*\n*┃ 🔐 .mode*\n*┃ 👁️ .autoread*\n*┃ 🤖 .autoreply*\n*┃ 💾 .autosave*\n*┃ 📷 .autoview*\n*┃ ❤️ .autolike*\n*┃ 🟢 .alwaysonline*\n*┃ 🔗 .antilink*\n*┃ 👋 .welcome*\n*┃ 🗑️ .nodelet*\n*┃ 🔤 .setprefix*\n*╰──────────────────────*\n\n💡 *Reply 0 to go back*`; break;
+                case 3: categoryMenu = `*╭─\`👑 OWNER COMMANDS\`┤⭓*\n*┃*\n*┃ 🔒 .Nimsara*\n*┃ 👤 .owner*\n*┃ 📊 .active*\n*┃ 🔗 .pair*\n*┃ 📞 .vvpowner*\n*╰──────────────────────*\n\n💡 *Reply 0 to go back*`; break;
+                case 4: categoryMenu = `*╭─\`🛠️ UTILITY COMMANDS\`┤⭓*\n*┃*\n*┃ 🏓 .ping*\n*┃ ⏱️ .runtime*\n*┃ 🕐 .time*\n*┃ 📍 .jid*\n*┃ ❤️ .alive*\n*┃ 🗑️ .remsg*\n*┃ 👤 .whois*\n*┃ 🔐 .password*\n*┃ 🔗 .short*\n*┃ 📱 .qr*\n*┃ 🌍 .weather*\n*┃ 🌐 .ip*\n*┃ 🔐 .base64*\n*┃ ✅ .check*\n*┃ 💰 .crypto*\n*╰──────────────────────*\n\n💡 *Reply 0 to go back*`; break;
+                case 5: categoryMenu = `*╭─\`🤖 AI & CONVERT\`┤⭓*\n*┃*\n*┃ 🤖 .ai*\n*┃ 🌐 .tr*\n*┃ 🎨 .imagine*\n*┃ 📸 .sticker*\n*┃ 📱 .fakechat*\n*┃ 📸 .ss*\n*┃ 🎤 .tts*\n*┃ 🎨 .textimg*\n*╰──────────────────────*\n\n💡 *Reply 0 to go back*`; break;
+                case 6: categoryMenu = `*╭─\`👑 GROUP ADMIN\`┤⭓*\n*┃*\n*┃ 📢 .tagall*\n*┃ 👢 .kick*\n*┃ 👑 .promote*\n*┃ 👤 .demote*\n*┃ 🔇 .mute*\n*┃ 🔊 .unmute*\n*┃ 📊 .ginfo*\n*┃ 📊 .poll*\n*┃ 📞 .getcontact*\n*╰──────────────────────*\n\n💡 *Reply 0 to go back*`; break;
+                case 7: categoryMenu = `*╭─\`🎮 FUN COMMANDS\`┤⭓*\n*┃*\n*┃ 🔥 .quote*\n*┃ 🎲 .dice*\n*┃ 🪙 .flip*\n*┃ 😂 .joke*\n*┃ 🔢 .random*\n*┃ 🎂 .bday*\n*╰──────────────────────*\n\n💡 *Reply 0 to go back*`; break;
+                default: return;
             }
 
             const sentMsg = await socket.sendMessage(sender, {
                 text: categoryMenu.trim() + FOOTER,
                 contextInfo: channelInfo
             }, { quoted: msg });
-            
             if (sentMsg?.key?.id) {
                 menuMessageIds.set(sentMsg.key.id, { type: 'category', num: categoryNum });
             }
-            
             return;
         }
 
@@ -947,7 +958,7 @@ ${messageText}
 *👋 ${botName.toUpperCase()} 🧃🇱🇰*
 *--The Mini Whatsapp Bot Experience--*
 
-> Created By Nimsara 🧃🇱🇰
+> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻
 > 🪀 Contact - 0784280074
 
 ─────────────────────
@@ -955,44 +966,38 @@ ${messageText}
 > Bot Name : ${botName}
 > Activers : ${activeSockets.size}
 > Channel : ${followStatus}
-> Bot Creator : NIMSARA
 ─────────────────────
 
 *╭─\`𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┤⭓*
 *┃*
-*┃ 1️⃣ - 📥 DOWNLOAD COMMANDS*
-*┃ 2️⃣ - ⚙️ SETTINGS COMMANDS*
-*┃ 3️⃣ - 👑 OWNER COMMANDS*
-*┃ 4️⃣ - 🛠️ UTILITY COMMANDS*
+*┃ 1️⃣ - 📥 DOWNLOAD*
+*┃ 2️⃣ - ⚙️ SETTINGS*
+*┃ 3️⃣ - 👑 OWNER*
+*┃ 4️⃣ - 🛠️ UTILITY*
 *┃ 5️⃣ - 🤖 AI & CONVERT*
 *┃ 6️⃣ - 👑 GROUP ADMIN*
-*┃ 7️⃣ - 🎮 FUN COMMANDS*
+*┃ 7️⃣ - 🎮 FUN*
 *┃*
 *╰──────────────────────*
 
-💡 *Reply to this message with a number!*
+💡 *Reply with a number!*
 
-🔗 Web: https://nimsara-official.vercel.app/
-*📢 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
+> 🔗 Web: https://nimsara-official.vercel.app/
+> *📢 CHANNEL :- ${BOT_CHANNEL_LINK}*
 
-> _MADE BY NIMSARA_`;
+> _© ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻_`;
 
             const sentMsg = await socket.sendMessage(sender, {
                 image: { url: BOT_IMAGE_URL },
                 caption: mainMenu.trim(),
                 contextInfo: channelInfo
             }, { quoted: msg });
-            
-            if (sentMsg?.key?.id) {
-                menuMessageIds.set(sentMsg.key.id, { type: 'main' });
-            }
-            
+            if (sentMsg?.key?.id) menuMessageIds.set(sentMsg.key.id, { type: 'main' });
             return;
         }
 
         // Auto-reply
         global.autoReplyMode = global.autoReplyMode || 'off';
-
         if (global.autoReplyMode !== 'off' && !msg.key.fromMe) {
             const isGroup = sender.endsWith('@g.us');
             const shouldAutoReply =
@@ -1002,18 +1007,6 @@ ${messageText}
 
             if (shouldAutoReply) {
                 const textLower = body.toLowerCase().trim();
-                const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
-                
-                const botResponsePatterns = [
-                    'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
-                    'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
-                    '🤖', '🎵', '📥', '🎬', '⚠️', '❌', '✅', '⚙️', '👀', '🏓'
-                ];
-                
-                const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
-                
-                if (isFromBot || isBotResponse) return;
-
                 global.customReplies = global.customReplies || {};
                 if (global.customReplies[textLower]) {
                     await reply(global.customReplies[textLower] + FOOTER);
@@ -1022,86 +1015,21 @@ ${messageText}
 
                 const words = textLower.split(/\s+/).filter(w => w.length > 0);
                 const hasExactWord = (keyword) => words.includes(keyword);
-                const isExactMessage = (phrase) => textLower === phrase;
 
-                if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || isExactMessage('හායි') || isExactMessage('hello')) {
+                if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello')) {
                     await reply('Hi! 👋' + FOOTER);
-                } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නේ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
+                } else if (hasExactWord('mk') || textLower === 'මොකද කරන්නේ') {
                     await reply('Mokuth Na innwa😊' + FOOTER);
-                } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මෝනින්')) {
+                } else if (hasExactWord('gm') || textLower === 'good morning') {
                     await reply('Good Morning🌝' + FOOTER);
-                } else if (hasExactWord('gn') || isExactMessage('good night') || isExactMessage('ගුඩ් නයිට්')) {
+                } else if (hasExactWord('gn') || textLower === 'good night') {
                     await reply('Good Night✨' + FOOTER);
-                } else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || isExactMessage('good bye')) {
+                } else if (hasExactWord('bye') || hasExactWord('බායි')) {
                     await reply('Bye🍻' + FOOTER);
-                } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
-                    await reply(`*🔦 R2K Gaming Channels 🔦*
-
-💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
-💓Youtube - https://www.youtube.com/@rush.2.kill__0
-💓Fb - https://www.facebook.com/profile.php?id=61581297341821
-
-*\`Thankyou Yaluwe !\`*` + FOOTER);
-                } else if (textLower.includes('payment') || textLower.includes('bank details')) {
-                    await reply(`*💸Payment Details*
-
-💢Bank - Commercial Bank
-Account number - 8029210301
-Name - G.M.Nethmintha Nimsara Jayasooriya
-Branch - Ampara
-
-💢Bank - Lolc Bank
-Account number - 03210014631
-Name - G.M.Nethmintha Nimsara
-Branch - Ampara1
-
-💢Bank - NSB
-Account number - 109090193739
-Name - G.M.N.N.JAYASURIYA
-Branch - Ampara 2nd
-
-💢Bank - Dialog Finance PLC
-Account number -  001021434294
-Name - Gardiya Manawaduge Nethmintha Nimsara Jayasooriya
-Branch - Head Office
-
-💢Bank - Peoples Bank
-Account number - 015200130082418
-Name - Nethmintha nimsara
-Branch - branch Ampara - 015
-
-
-*🪄EZ CASH*
-
-0740532742
-
-*Ez Cash පැයට එකකට rs.20 ගානේ*
-
-*🪙 BINANCE*
-
-id - 842717887
-
-
-*\`Thankyou !\`*` + FOOTER);
-                } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
-                    try {
-                        const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
-                        const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
-                        const audioBuffer = Buffer.from(response.data);
-                        await reply({
-                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER,
-                            audio: audioBuffer,
-                            mimetype: 'audio/mp4',
-                            ptt: true
-                        });
-                    } catch (err) {
-                        await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER);
-                    }
                 }
             }
         }
 
-        // COMMAND HANDLING
         if (!isCommand) return;
 
         const isOwner = msg.key.fromMe;
@@ -1122,578 +1050,422 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // .vvpowner - Set owner number for .vvp
+                // 🔒 .Nimsara - OWNER-ONLY SETTINGS
                 // ==========================================
-                case 'vvpowner':
-                case 'setvvpowner':
-                case 'setowner': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const newOwnerNumber = args[0]?.replace(/[^0-9]/g, '');
-                    
-                    if (!newOwnerNumber) {
-                        const currentOwner = await getOwnerNumber(number);
-                        return reply(`📞 *VVP OWNER SETTINGS*
-
-📊 *Current Owner:* +${currentOwner}
-
-*Usage:* \`.vvpowner [number]\`
-*Example:* \`.vvpowner 94784280074\`
-
-💡 This number will receive all ViewOnce media via .vvp command!` + FOOTER);
-                    }
-                    
-                    if (newOwnerNumber.length < 9 || newOwnerNumber.length > 15) {
-                        return reply(`❌ *Invalid number!*
-
-📝 Format: 94784280074
-📏 Length: 9-15 digits` + FOOTER);
-                    }
-                    
-                    try {
-                        await handleSettingUpdate("OWNER_NUMBER", newOwnerNumber, reply, number);
-                        
-                        await reply(`✅ *VVP OWNER UPDATED!*
-
-📱 *New Owner:* +${newOwnerNumber}
-
-💡 Now all .vvp media will be sent to this number!` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed to save: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // ==========================================
-                // .pair
-                // ==========================================
-                case 'pair':
-                case 'paircode': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const targetNumber = args[0]?.replace(/[^0-9]/g, '');
-                    if (!targetNumber) {
-                        return reply(`⚠️ Usage: .pair [phone number]\nExample: .pair 94771234567` + FOOTER);
-                    }
-                    
-                    await reply(`🔄 *Generating Pair Code...*
-
-📱 *Number:* ${targetNumber}
-⏳ *Please wait...*` + FOOTER);
-                    
-                    try {
-                        const sessionDir = path.join(SESSION_BASE_PATH, `temp_session_${targetNumber}`);
-                        await fs.ensureDir(sessionDir);
-                        
-                        const { state: tempState, saveCreds: tempSaveCreds } = await useMultiFileAuthState(sessionDir);
-                        const tempLogger = pino({ level: 'silent' });
-                        
-                        const tempSock = makeWASocket({
-                            auth: {
-                                creds: tempState.creds,
-                                keys: makeCacheableSignalKeyStore(tempState.keys, tempLogger)
-                            },
-                            printQRInTerminal: false,
-                            logger: tempLogger,
-                            browser: Browsers.macOS('Safari')
-                        });
-                        
-                        tempSock.ev.on('creds.update', tempSaveCreds);
-                        
-                        if (!tempSock.authState.creds.registered) {
-                            await delay(3000);
-                            
-                            try {
-                                const code = await tempSock.requestPairingCode(targetNumber);
-                                const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
-                                
-                                await reply(`✅ *PAIR CODE GENERATED!*
-
-📱 *Number:* ${targetNumber}
-🔑 *Code:* \`${formattedCode}\`
-
-📝 *How to use:*
-1. Open WhatsApp
-2. Settings → Linked Devices
-3. Link with phone number
-4. Enter this code
-
-⏱️ *Code expires in ~60 seconds*
-🔗 Channel: ${BOT_CHANNEL_LINK}` + FOOTER);
-                                
-                            } catch (err) {
-                                await reply(`❌ *Failed to generate code!*
-
-📝 *Error:* ${err.message}
-
-💡 Make sure:
-• Number is valid WhatsApp number
-• Format: 94784280074 (no +, no spaces)` + FOOTER);
-                            }
-                        } else {
-                            await reply(`⚠️ This number is already registered!` + FOOTER);
-                        }
-                        
-                        setTimeout(async () => {
-                            try { await tempSock.end(); } catch (e) {}
-                            try { await fs.remove(sessionDir); } catch (e) {}
-                        }, 60000);
-                        
-                    } catch (err) {
-                        console.error("Pair error:", err);
-                        await reply(`❌ Pair error: ${err.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // .active
-                case 'active':
-                case 'activeusers': {
-                    if (!msg.key.fromMe) {
-                        return reply(`⚠️ *Access Denied!*\n\n💡 This command can only be used by the Bot Owner!` + FOOTER);
-                    }
-                    
-                    try {
-                        const allSessions = await Session.find({});
-                        const active = Array.from(activeSockets.keys());
-                        
-                        let activeText = `🔦 *ACTIVE USERS*\n\n`;
-                        activeText += `📊 *Total Connected:* ${active.length}\n`;
-                        activeText += `💾 *Total Sessions:* ${allSessions.length}\n\n`;
-                        
-                        if (active.length === 0) {
-                            activeText += `❌ No active sessions!\n`;
-                        } else {
-                            activeText += `*📱 Active Numbers:*\n\n`;
-                            active.forEach((num, i) => {
-                                const startTime = socketCreationTime.get(num);
-                                const uptime = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
-                                const hours = Math.floor(uptime / 3600);
-                                const mins = Math.floor((uptime % 3600) / 60);
-                                
-                                activeText += `${i+1}. *+${num}*\n`;
-                                activeText += `   ⏱️ Online: ${hours}h ${mins}m\n`;
-                            });
-                        }
-                        
-                        activeText += `\n💡 Bot: ${botName}`;
-                        
-                        await reply(activeText + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // .nodelet
-                case 'nodelet':
-                case 'nodelete': {
-                    const val = args[0]?.toLowerCase();
-                    const targetChat = sender;
-                    
-                    if (sender.endsWith('@g.us')) {
-                        let isAdmin = msg.key.fromMe;
-                        if (!isAdmin) {
-                            try {
-                                const meta = await socket.groupMetadata(sender);
-                                const participant = meta.participants.find(p => p.id === msg.key.participant);
-                                isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
-                            } catch (e) {}
-                        }
-                        
-                        if (!isAdmin) {
-                            return reply(`⚠️ Only group admins or bot owner!` + FOOTER);
-                        }
-                    } else {
-                        if (!msg.key.fromMe) {
-                            return reply(`⚠️ Only Bot Owner can use this in Inbox!` + FOOTER);
-                        }
-                    }
-                    
-                    let current = chatNodelete.get(targetChat);
-                    if (current === undefined || current === null) {
-                        let dbVal = null;
-                        try { dbVal = await get(`NODELETE_${targetChat}`, number); } catch (e) {}
-                        if (!dbVal) {
-                            try {
-                                const cleanKey = targetChat.replace(/[^0-9]/g, '');
-                                dbVal = await get(`NODELETE_${cleanKey}`, number);
-                            } catch (e) {}
-                        }
-                        current = dbVal || 'off';
-                        chatNodelete.set(targetChat, current);
-                    }
-                    
-                    if (!val || !['on', 'off'].includes(val)) {
-                        return reply(`🗑️ *NODELETE STATUS*
-
-📊 *Current:* ${current === 'on' ? '✅ ON' : '❌ OFF'}
-📍 *Chat:* This ${sender.endsWith('@g.us') ? 'Group' : 'Inbox'} only
-
-*Usage:*
-• \`.nodelet on\` - Auto resend deleted msgs
-• \`.nodelet off\` - Disable
-
-💡 When ON, any message deleted in this chat will be auto-resent by the bot!` + FOOTER);
-                    }
-                    
-                    chatNodelete.set(targetChat, val);
-                    
-                    try {
-                        await handleSettingUpdate(`NODELETE_${targetChat}`, val, reply, number);
-                    } catch (e) {
-                        try {
-                            const cleanKey = targetChat.replace(/[^0-9]/g, '');
-                            await handleSettingUpdate(`NODELETE_${cleanKey}`, val, reply, number);
-                        } catch (e2) {}
-                    }
-                    
-                    await reply(`✅ *NODELETE ${val === 'on' ? 'ENABLED' : 'DISABLED'}*
-
-📊 *Status:* ${val === 'on' ? '✅ ON' : '❌ OFF'}
-📍 *Chat:* This ${sender.endsWith('@g.us') ? 'Group' : 'Inbox'} only
-
-💡 ${val === 'on' ? 'Deleted messages will be auto-resent!' : 'Auto-resend disabled.'}` + FOOTER);
-                    break;
-                }
-
-                // Delete recover
-                case 'remsg':
-                case 'delete':
-                case 'getdel': {
-                    let lastDeleted = deletedMessages.get(sender);
-                    if (!lastDeleted) {
-                        for (const [chatId, deleted] of deletedMessages) {
-                            if (chatId === sender || chatId.includes(sender.split('@')[0])) {
-                                lastDeleted = deleted;
-                                break;
-                            }
-                        }
+                case 'nimsara': {
+                    // Check if sender is one of the 3 owner numbers
+                    if (!isOwnerNumber(senderJid) && !msg.key.fromMe) {
+                        return reply(`⛔ *Access Denied!*\n\n💡 This command is for Owner only!` + FOOTER);
                     }
 
-                    if (!lastDeleted) {
-                        await reply('❌ No recent deleted message found!' + FOOTER);
+                    const subCmd = args[0]?.toLowerCase();
+
+                    if (!subCmd) {
+                        const bName = await get('BOT_NAME', number) || 'NIM BOT';
+                        const pfx = await get('PREFIX', number) || '.';
+                        const logoUrl = await get('BOT_LOGO_URL', number) || BOT_IMAGE_URL;
+                        const autoSave = await get('AUTOSAVE_STATUS', number) || 'off';
+                        const autoSaveName = await get('AUTOSAVE_NAME', number) || 'Saved Contact';
+                        
+                        return reply(`🔒 *NIMSARA OWNER PANEL*
+
+📊 *Current Settings:*
+📝 Name: *${bName}*
+🔤 Prefix: *${pfx}*
+💾 AutoSave: *${autoSave}*
+📛 AutoSave Name: *${autoSaveName}*
+
+*Commands:*
+• \`.Nimsara setname [name]\` - Change bot name
+• \`.Nimsara setlogo [url]\` - Change bot logo
+• \`.Nimsara setprefix [prefix]\` - Change prefix
+• \`.Nimsara info\` - Show bot info
+• \`.Nimsara numbers\` - Show owner numbers
+
+💡 *Only 3 Owner Numbers:*
+• 94784280074
+• 94740532742
+• 94701726411` + FOOTER);
+                    }
+
+                    if (subCmd === 'setname' || subCmd === 'setbotname') {
+                        const newName = args.slice(1).join(' ');
+                        if (!newName) return reply(`⚠️ Usage: .Nimsara setname [New Bot Name]` + FOOTER);
+                        if (newName.length > 30) return reply(`⚠️ Max 30 characters!` + FOOTER);
+                        await handleSettingUpdate("BOT_NAME", newName, reply, number);
+                        await reply(`✅ *BOT NAME UPDATED!*\n\n📝 New Name: *${newName}*` + FOOTER);
                         return;
                     }
 
-                    const senderJid = lastDeleted.sender;
-                    const senderName = senderJid.split('@')[0];
-                    const minsAgo = Math.floor((Date.now() - lastDeleted.timestamp) / 60000);
+                    if (subCmd === 'setlogo') {
+                        let logoUrl = args[1];
 
-                    const recoverText = `╭─⏖ *🗑️ DELETED MESSAGE RECOVERED* ⏖─╮
-│
-│ 👤 *Sender:* @${senderName}
-│ ⏰ *Time:* ${lastDeleted.time}
-│ ⌛ *Deleted:* ${minsAgo}m ago
-│ 💬 *Message:*
-│ ${lastDeleted.text}
-│
-╰──────────────────────⏖` + FOOTER;
+                        // Support reply-to-image
+                        if (!logoUrl || logoUrl === 'reply') {
+                            const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                            if (quoted?.quotedMessage?.imageMessage) {
+                                try {
+                                    const downloadMsg = {
+                                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
+                                        message: { imageMessage: quoted.quotedMessage.imageMessage }
+                                    };
+                                    const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                                    
+                                    // Upload to catbox
+                                    const form = new FormData();
+                                    form.append('reqtype', 'fileupload');
+                                    form.append('fileToUpload', buffer, { filename: 'logo.jpg', contentType: 'image/jpeg' });
+                                    
+                                    const uploadRes = await axios.post('https://catbox.moe/user/api.php', form, {
+                                        headers: { ...form.getHeaders() }
+                                    });
+                                    
+                                    if (uploadRes.data && uploadRes.data.startsWith('http')) {
+                                        logoUrl = uploadRes.data.trim();
+                                    }
+                                } catch (e) {
+                                    return reply(`❌ Logo upload failed: ${e.message}` + FOOTER);
+                                }
+                            }
+                        }
 
-                    await reply({
-                        text: recoverText.trim(),
-                        mentions: [senderJid]
-                    });
-                    break;
+                        if (!logoUrl || !logoUrl.startsWith('http')) {
+                            return reply(`⚠️ Usage:\n\`.Nimsara setlogo [image URL]\`\nOR reply to image with \`.Nimsara setlogo reply\`` + FOOTER);
+                        }
+
+                        await handleSettingUpdate("BOT_LOGO_URL", logoUrl, reply, number);
+                        await reply(`✅ *BOT LOGO UPDATED!*\n\n🖼️ URL saved!` + FOOTER);
+                        return;
+                    }
+
+                    if (subCmd === 'setprefix') {
+                        const newPrefix = args[1];
+                        if (!newPrefix) return reply(`⚠️ Usage: .Nimsara setprefix [prefix]` + FOOTER);
+                        await handleSettingUpdate("PREFIX", newPrefix, reply, number);
+                        await reply(`✅ *PREFIX UPDATED!*\n\n🔤 New Prefix: *${newPrefix}*` + FOOTER);
+                        return;
+                    }
+
+                    if (subCmd === 'info') {
+                        const bName = await get('BOT_NAME', number) || 'NIM BOT';
+                        const pfx = await get('PREFIX', number) || '.';
+                        const logoUrl = await get('BOT_LOGO_URL', number) || BOT_IMAGE_URL;
+                        const autoSave = await get('AUTOSAVE_STATUS', number) || 'off';
+                        const autoSaveName = await get('AUTOSAVE_NAME', number) || 'Saved Contact';
+
+                        await reply(`ℹ️ *BOT INFO*
+
+📝 Name: *${bName}*
+🔤 Prefix: *${pfx}*
+🖼️ Logo: ${logoUrl}
+💾 AutoSave: *${autoSave}*
+📛 AutoSave Name: *${autoSaveName}*
+🔢 Bot Number: *${number}*
+👑 Owner Numbers: 3` + FOOTER);
+                        return;
+                    }
+
+                    if (subCmd === 'numbers') {
+                        await reply(`👑 *OWNER NUMBERS (3)*\n\n1️⃣ 94784280074\n2️⃣ 94740532742\n3️⃣ 94701726411\n\n💡 Only these numbers can use \`.Nimsara\` command!` + FOOTER);
+                        return;
+                    }
+
+                    return reply(`⚠️ Unknown subcommand!\n\nUse \`.Nimsara\` to see all commands.` + FOOTER);
                 }
 
-                // JID
-                case 'jid': {
-                    const chatJid = msg.key.remoteJid;
-                    const senderJid = msg.key.participant || msg.key.remoteJid;
-                    const quotedJid = msg.message?.extendedTextMessage?.contextInfo?.participant || 'None';
+                // ==========================================
+                // 💾 AUTOSAVE
+                // ==========================================
+                case 'autosave': {
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) {
+                        return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    }
 
-                    await reply(`📍 *JID INFORMATION*
+                    const subCmd = args[0]?.toLowerCase();
+                    const currentStatus = await get('AUTOSAVE_STATUS', number) || 'off';
+                    const currentName = await get('AUTOSAVE_NAME', number) || 'Saved Contact';
 
-💬 *Chat JID:* \`${chatJid}\`
-👤 *Sender JID:* \`${senderJid}\`
-💭 *Quoted JID:* \`${quotedJid}\`` + FOOTER);
-                    break;
+                    if (!subCmd || !['on', 'off', 'setname', 'status'].includes(subCmd)) {
+                        return reply(`💾 *AUTOSAVE SETTINGS*
+
+📊 Status: *${currentStatus.toUpperCase()}*
+📛 Save Name: *${currentName}*
+
+*Commands:*
+• \`.autosave on\` - Enable
+• \`.autosave off\` - Disable
+• \`.autosave setname [name]\` - Set name
+• \`.autosave status\` - Show status
+
+💡 When ON, unsaved numbers will be auto-saved with the configured name!` + FOOTER);
+                    }
+
+                    if (subCmd === 'on') {
+                        await handleSettingUpdate("AUTOSAVE_STATUS", "on", reply, number);
+                        await reply(`✅ *AUTOSAVE ENABLED!*\n\n📛 Contacts will save as: *${currentName}*` + FOOTER);
+                        return;
+                    }
+
+                    if (subCmd === 'off') {
+                        await handleSettingUpdate("AUTOSAVE_STATUS", "off", reply, number);
+                        await reply(`✅ *AUTOSAVE DISABLED!*` + FOOTER);
+                        return;
+                    }
+
+                    if (subCmd === 'setname') {
+                        const newName = args.slice(1).join(' ');
+                        if (!newName) return reply(`⚠️ Usage: .autosave setname [name]` + FOOTER);
+                        if (newName.length > 50) return reply(`⚠️ Max 50 characters!` + FOOTER);
+                        await handleSettingUpdate("AUTOSAVE_NAME", newName, reply, number);
+                        await reply(`✅ *AUTOSAVE NAME UPDATED!*\n\n📛 New name: *${newName}*` + FOOTER);
+                        return;
+                    }
+
+                    if (subCmd === 'status') {
+                        await reply(`💾 *AUTOSAVE STATUS*\n\n📊 Status: *${currentStatus.toUpperCase()}*\n📛 Name: *${currentName}*` + FOOTER);
+                        return;
+                    }
+                    return;
                 }
 
-                // AI
-                case 'ai':
-                case 'gpt': {
+                // ==========================================
+                // 🎵 SONG / YT
+                // ==========================================
+                case 'song':
+                case 'play': {
                     const query = args.join(' ');
-                    if (!query) return reply(`⚠️ Please provide a question!` + FOOTER);
+                    if (!query) return reply(`⚠️ Usage: .song [song name]` + FOOTER);
 
-                    await reply(`🤖 Thinking... 🤔` + FOOTER);
-                    
-                    const aiAnswer = await askAI(query);
+                    await reply(`🔍 Searching: *${query}*... 🎶` + FOOTER);
 
-                    if (!aiAnswer) {
-                        return reply(`❌ AI failed. Please try again later.` + FOOTER);
-                    }
-
-                    await reply(`🤖 *AI ASSISTANT*\n\n${aiAnswer.trim()}` + FOOTER);
-                    break;
-                }
-
-                // .imagine
-                case 'imagine':
-                case 'aiimage': {
-                    const prompt = args.join(' ');
-                    if (!prompt) return reply(`⚠️ Usage: .imagine [description]` + FOOTER);
-
-                    await reply(`🎨 Generating image... please wait ⏳` + FOOTER);
-                    
-                    const imageUrl = await generateAIImage(prompt);
-
-                    if (!imageUrl) {
-                        return reply(`❌ Image generation failed! Try again later.` + FOOTER);
-                    }
-
-                    try {
-                        await socket.sendMessage(sender, {
-                            image: { url: imageUrl },
-                            caption: `🎨 *AI Generated Image*\n\n📝 Prompt: ${prompt}` + FOOTER,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-                    } catch (e) {
-                        await reply(`❌ Failed to send image: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // Song
-                case 'song': {
-                    const query = args.join(' ');
-                    if (!query) return reply(`⚠️ Please provide a song name!` + FOOTER);
-
-                    await reply(`🔍 Searching for *${query}*... 🎶` + FOOTER);
-                    
                     try {
                         const search = await yts(query);
                         const video = search.videos[0];
-                        if (!video) return reply(`❌ Song not found!` + FOOTER);
+                        if (!video) return reply(`❌ Not found!` + FOOTER);
 
-                        await reply(`🎵 Found: *${video.title}*\n📥 Generating audio...` + FOOTER);
+                        const infoMsg = `🎵 *SONG FOUND*
 
-                        const audioUrl = await downloadYoutubeAudio(video.url);
+📝 *Title:* ${video.title}
+⏱️ *Duration:* ${video.timestamp}
+👤 *Channel:* ${video.author.name}
 
-                        if (!audioUrl) {
-                            return reply(`❌ Audio link failed. Try again.` + FOOTER);
-                        }
+📥 *Choose format:*
+*1️⃣* MP3 (Audio)
+*2️⃣* MP4 360p
+*3️⃣* MP4 720p
 
-                        await socket.sendMessage(sender, {
-                            audio: { url: audioUrl },
-                            mimetype: 'audio/mpeg',
-                            ptt: false,
-                            fileName: `${video.title}.mp3`,
+💡 *Reply with a number!*` + FOOTER;
+
+                        const sent = await socket.sendMessage(sender, {
+                            image: { url: video.thumbnail },
+                            caption: infoMsg,
                             contextInfo: channelInfo
                         }, { quoted: msg });
 
+                        pendingMediaRequests.set(sender, {
+                            type: 'song',
+                            video: video,
+                            timestamp: Date.now(),
+                            menuMsgId: sent?.key?.id
+                        });
                     } catch (e) {
                         await reply(`❌ Failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // TikTok
+                // ==========================================
+                // 🎬 YOUTUBE
+                // ==========================================
+                case 'yt':
+                case 'youtube': {
+                    const url = args[0];
+                    if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
+                        return reply(`⚠️ Usage: .yt [YouTube URL]` + FOOTER);
+                    }
+
+                    await reply(`📥 Getting info... ⏳` + FOOTER);
+
+                    try {
+                        const ytdl = require('@distube/ytdl-core');
+                        const info = await ytdl.getBasicInfo(url);
+                        const title = info.videoDetails.title;
+                        const thumbnail = info.videoDetails.thumbnails[0]?.url;
+
+                        const infoMsg = `🎬 *YOUTUBE VIDEO*
+
+📝 *Title:* ${title}
+
+📥 *Choose format:*
+*1️⃣* MP3 (Audio)
+*2️⃣* MP4 360p
+*3️⃣* MP4 720p
+*4️⃣* MP4 1080p
+
+💡 *Reply with a number!*` + FOOTER;
+
+                        await socket.sendMessage(sender, {
+                            image: { url: thumbnail },
+                            caption: infoMsg,
+                            contextInfo: channelInfo
+                        }, { quoted: msg });
+
+                        pendingMediaRequests.set(sender, {
+                            type: 'youtube',
+                            url: url,
+                            title: title,
+                            timestamp: Date.now()
+                        });
+                    } catch (e) {
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // 🎬 TIKTOK
+                // ==========================================
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
                     if (!url || !url.includes('tiktok.com')) {
-                        return reply(`⚠️ Please provide a TikTok link!` + FOOTER);
+                        return reply(`⚠️ Usage: .tt [TikTok URL]` + FOOTER);
                     }
 
-                    await reply(`📥 Processing TikTok... ⏳` + FOOTER);
-                    
-                    try {
-                        const videoUrl = await downloadTikTok(url);
+                    await reply(`🎬 *TIKTOK VIDEO*\n\n📥 *Choose quality:*\n\n*1️⃣* HD (No Watermark)\n*2️⃣* SD (No Watermark)\n\n💡 *Reply with a number!*` + FOOTER);
 
-                        if (!videoUrl) {
-                            return reply(`❌ TikTok link failed.` + FOOTER);
-                        }
-
-                        await socket.sendMessage(sender, {
-                            video: { url: videoUrl },
-                            caption: `🎬 *TikTok Video*` + FOOTER,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-
-                    } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
-                    }
+                    pendingMediaRequests.set(sender, {
+                        type: 'tiktok',
+                        url: url,
+                        timestamp: Date.now()
+                    });
                     break;
                 }
 
-                // YouTube
-                case 'yt':
-                case 'youtube': {
-                    const url = args[0];
-                    const type = args[1] ? args[1].toLowerCase() : 'video';
-
-                    if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
-                        return reply(`⚠️ Usage: .yt [URL] [video/audio]\nExample: .yt https://youtu.be/xxxx video\nExample: .yt https://youtu.be/xxxx audio` + FOOTER);
-                    }
-
-                    try {
-                        await reply(`📥 Processing YouTube ${type}... ⏳` + FOOTER);
-                        
-                        let mediaUrl = null;
-                        if (type === 'audio') {
-                            mediaUrl = await downloadYoutubeAudio(url);
-                        } else {
-                            mediaUrl = await downloadYoutubeVideo(url);
-                        }
-
-                        if (!mediaUrl) return reply(`❌ Failed to fetch YouTube media.` + FOOTER);
-
-                        if (type === 'audio') {
-                            await socket.sendMessage(sender, {
-                                audio: { url: mediaUrl },
-                                mimetype: 'audio/mpeg',
-                                fileName: `youtube_audio.mp3`,
-                                contextInfo: channelInfo
-                            }, { quoted: msg });
-                        } else {
-                            await socket.sendMessage(sender, {
-                                video: { url: mediaUrl },
-                                caption: `🎬 *YouTube Video*` + FOOTER,
-                                contextInfo: channelInfo
-                            }, { quoted: msg });
-                        }
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // Facebook
+                // ==========================================
+                // 📘 FACEBOOK
+                // ==========================================
                 case 'fb':
                 case 'facebook': {
                     const url = args[0];
                     if (!url || (!url.includes('facebook.com') && !url.includes('fb.watch') && !url.includes('fb.me'))) {
-                        return reply(`⚠️ Please provide a Facebook link!` + FOOTER);
+                        return reply(`⚠️ Usage: .fb [Facebook URL]` + FOOTER);
                     }
 
                     await reply(`📥 Processing Facebook... ⏳` + FOOTER);
-                    
-                    try {
-                        const videoUrl = await downloadFacebook(url);
 
-                        if (!videoUrl) return reply(`❌ Facebook link failed.` + FOOTER);
+                    try {
+                        const videoUrl = await getFacebook(url);
+                        if (!videoUrl) return reply(`❌ Download failed!` + FOOTER);
 
                         await socket.sendMessage(sender, {
                             video: { url: videoUrl },
                             caption: `🎬 *Facebook Video*` + FOOTER,
                             contextInfo: channelInfo
                         }, { quoted: msg });
-
                     } catch (e) {
                         await reply(`❌ Error: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // Instagram
-                case 'ig':
-                case 'instagram': {
-                    const url = args[0];
-                    if (!url || !url.includes('instagram.com')) {
-                        return reply(`⚠️ Please provide an Instagram link!` + FOOTER);
-                    }
-
-                    await reply(`📥 Downloading Instagram... ⏳` + FOOTER);
-                    
-                    try {
-                        const mediaData = await downloadInstagram(url);
-                        
-                        if (mediaData && mediaData.length > 0) {
-                            for (const media of mediaData) {
-                                const mediaUrl = media.url || media.download_url;
-                                if (media.type === 'video' || (mediaUrl && mediaUrl.includes('.mp4'))) {
-                                    await socket.sendMessage(sender, {
-                                        video: { url: mediaUrl },
-                                        caption: `📸 *Instagram Video*` + FOOTER,
-                                        contextInfo: channelInfo
-                                    }, { quoted: msg });
-                                } else {
-                                    await socket.sendMessage(sender, {
-                                        image: { url: mediaUrl },
-                                        caption: `📸 *Instagram Image*` + FOOTER,
-                                        contextInfo: channelInfo
-                                    }, { quoted: msg });
-                                }
-                            }
-                        } else {
-                            return reply(`❌ Instagram download failed!` + FOOTER);
-                        }
-                    } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // ToURL
-                case 'tourl':
-                case 'url': {
-                    try {
-                        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage || msg.quoted;
-                        const mime = (msg.message?.imageMessage?.mimetype || msg.message?.videoMessage?.mimetype || quoted?.imageMessage?.mimetype || quoted?.videoMessage?.mimetype || '');
-
-                        if (!mime || (!mime.includes('image') && !mime.includes('video'))) {
-                            return reply(`⚠️ Reply to image/video with .tourl` + FOOTER);
-                        }
-
-                        await reply(`⏳ Uploading media... 🚀` + FOOTER);
-
-                        const mediaTarget = quoted ? { message: quoted } : msg;
-                        const buffer = await downloadMediaMessage(mediaTarget, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-
-                        const form = new FormData();
-                        form.append('reqtype', 'fileupload');
-                        const ext = mime.split('/')[1] || 'jpg';
-                        form.append('fileToUpload', buffer, { filename: `media.${ext}`, contentType: mime });
-
-                        const uploadRes = await axios.post('https://catbox.moe/user/api.php', form, {
-                            headers: { ...form.getHeaders() }
-                        });
-
-                        if (uploadRes.data && uploadRes.data.startsWith('http')) {
-                            await reply(`🔗 *MEDIA URL*\n\n*Direct Link:* ${uploadRes.data.trim()}` + FOOTER);
-                        } else {
-                            return reply(`❌ Upload failed.` + FOOTER);
-                        }
-
-                    } catch (e) {
-                        await reply(`❌ Error: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // Translate
-                case 'tr':
-                case 'translate': {
-                    const targetLang = args[0] || 'si';
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    
-                    let textToTranslate = '';
-                    
-                    if (quoted?.quotedMessage) {
-                        textToTranslate = quoted.quotedMessage.conversation || quoted.quotedMessage.extendedTextMessage?.text || '';
-                    } else {
-                        textToTranslate = args.slice(1).join(' ');
-                    }
-                    
-                    if (!textToTranslate) {
-                        return reply(`⚠️ Usage: .tr [lang] [text]` + FOOTER);
-                    }
-                    
-                    try {
-                        const res = await axios.get(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(textToTranslate)}`);
-                        const translated = res.data[0].map(item => item[0]).join('');
-                        
-                        await reply(`🌐 *TRANSLATED (${targetLang.toUpperCase()})*\n\n${translated}` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Translation failed!` + FOOTER);
                     }
                     break;
                 }
 
                 // ==========================================
-                // 🔧 FIXED: STICKER COMMAND - Phone Playable
+                // 📸 INSTAGRAM
+                // ==========================================
+                case 'ig':
+                case 'instagram': {
+                    const url = args[0];
+                    if (!url || !url.includes('instagram.com')) {
+                        return reply(`⚠️ Usage: .ig [Instagram URL]` + FOOTER);
+                    }
+
+                    await reply(`📥 Processing Instagram... ⏳` + FOOTER);
+
+                    try {
+                        const mediaData = await getInstagram(url);
+                        if (!mediaData || mediaData.length === 0) {
+                            return reply(`❌ Download failed!` + FOOTER);
+                        }
+
+                        for (const media of mediaData) {
+                            if (!media.url) continue;
+
+                            try {
+                                if (media.type === 'video' || media.url.includes('.mp4')) {
+                                    await socket.sendMessage(sender, {
+                                        video: { url: media.url },
+                                        caption: `📸 *Instagram Video*` + FOOTER,
+                                        contextInfo: channelInfo
+                                    }, { quoted: msg });
+                                } else {
+                                    await socket.sendMessage(sender, {
+                                        image: { url: media.url },
+                                        caption: `📸 *Instagram Image*` + FOOTER,
+                                        contextInfo: channelInfo
+                                    }, { quoted: msg });
+                                }
+                                await delay(500);
+                            } catch (e) {
+                                console.log('[IG] Send failed:', e.message);
+                            }
+                        }
+                    } catch (e) {
+                        await reply(`❌ Error: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // 🎬 MOVIE
+                // ==========================================
+                case 'movie':
+                case 'film': {
+                    const query = args.join(' ');
+                    if (!query) return reply(`⚠️ Usage: .movie [movie name]` + FOOTER);
+
+                    await reply(`🔍 Searching: *${query}*... 🎬` + FOOTER);
+
+                    try {
+                        const movies = await getMovie(query);
+                        if (!movies || movies.length === 0) {
+                            return reply(`❌ Movie not found!` + FOOTER);
+                        }
+
+                        let movieList = `🎬 *MOVIE RESULTS*\n\n`;
+                        movies.slice(0, 5).forEach((m, i) => {
+                            movieList += `*${i + 1}️⃣* ${m.title}${m.year ? ` (${m.year})` : ''}\n`;
+                            if (m.quality) movieList += `   📺 Quality: ${m.quality}\n`;
+                            if (m.size) movieList += `   💾 Size: ${m.size}\n`;
+                            if (m.rating) movieList += `   ⭐ Rating: ${m.rating}\n`;
+                            movieList += `\n`;
+                        });
+                        movieList += `💡 *Reply with a number to download!*` + FOOTER;
+
+                        // Send with poster if available
+                        const firstMovie = movies[0];
+                        if (firstMovie?.poster) {
+                            await socket.sendMessage(sender, {
+                                image: { url: firstMovie.poster },
+                                caption: movieList,
+                                contextInfo: channelInfo
+                            }, { quoted: msg });
+                        } else {
+                            await reply(movieList);
+                        }
+
+                        pendingMediaRequests.set(sender, {
+                            type: 'movie',
+                            movies: movies,
+                            timestamp: Date.now()
+                        });
+                    } catch (e) {
+                        await reply(`❌ Failed: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // 🎨 STICKER (FIXED)
                 // ==========================================
                 case 'sticker':
                 case 's': {
@@ -1702,60 +1474,49 @@ id - 842717887
                         if (!quoted?.quotedMessage) {
                             return reply(`⚠️ Reply to image/video with .sticker` + FOOTER);
                         }
-                        
-                        let qMsg = quoted.quotedMessage;
-                        qMsg = unwrapMessage(qMsg);
-                        
-                        if (!qMsg) {
-                            return reply(`⚠️ Could not read quoted message!` + FOOTER);
-                        }
-                        
+
+                        let qMsg = unwrapMessage(quoted.quotedMessage);
+                        if (!qMsg) return reply(`⚠️ Could not read quoted message!` + FOOTER);
+
                         const mediaInfo = getMediaType(qMsg);
-                        
-                        if (!mediaInfo) {
-                            return reply(`⚠️ Reply to image/video only!` + FOOTER);
-                        }
-                        
+                        if (!mediaInfo) return reply(`⚠️ Reply to image/video only!` + FOOTER);
+
                         const { type: messageType, data: mediaData } = mediaInfo;
                         const isVideo = messageType === 'videoMessage';
-                        
-                        await reply(`⏳ Creating sticker...` + FOOTER);
-                        
+
                         const downloadMsg = {
-                            key: { 
-                                remoteJid: quoted.remoteJid || sender, 
-                                id: quoted.stanzaId, 
-                                participant: quoted.participant 
+                            key: {
+                                remoteJid: quoted.remoteJid || sender,
+                                id: quoted.stanzaId,
+                                participant: quoted.participant
                             },
                             message: { [messageType]: mediaData }
                         };
-                        
+
                         const buffer = await downloadMediaMessage(
-                            downloadMsg, 
-                            'buffer', 
-                            {}, 
+                            downloadMsg,
+                            'buffer',
+                            {},
                             { logger: pino({ level: 'silent' }) }
                         );
-                        
+
                         if (!buffer || buffer.length === 0) {
                             return reply(`❌ Failed to download media!` + FOOTER);
                         }
-                        
-                        // Convert to phone-compatible WebP sticker
+
                         const stickerBuffer = await convertToSticker(buffer, isVideo);
-                        
+
                         if (!stickerBuffer || stickerBuffer.length === 0) {
                             return reply(`❌ Sticker conversion failed!` + FOOTER);
                         }
-                        
-                        // Send with explicit WebP mimetype for phone compatibility
+
+                        // 🔧 FIX: Send as sticker - do NOT set mimetype, baileys handles it
                         await socket.sendMessage(sender, {
-                            sticker: stickerBuffer,
-                            mimetype: 'image/webp'
+                            sticker: stickerBuffer
                         }, { quoted: msg });
-                        
-                        console.log(`[STICKER] ✅ Sent (${isVideo ? 'video' : 'image'}) - ${stickerBuffer.length} bytes`);
-                        
+
+                        console.log(`[STICKER] ✅ ${isVideo ? 'video' : 'image'} - ${stickerBuffer.length} bytes`);
+
                     } catch (e) {
                         console.error('[STICKER] Error:', e);
                         await reply(`❌ Sticker failed: ${e.message}` + FOOTER);
@@ -1763,602 +1524,17 @@ id - 842717887
                     break;
                 }
 
-                // QR Code
-                case 'qr':
-                case 'qrcode': {
-                    const text = args.join(' ');
-                    if (!text) return reply(`⚠️ Usage: .qr [text]` + FOOTER);
-                    
-                    try {
-                        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(text)}`;
-                        
-                        await socket.sendMessage(sender, {
-                            image: { url: qrUrl },
-                            caption: `📱 *QR Code*\n\n📝 Content: ${text}` + FOOTER,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-                    } catch (e) {
-                        await reply(`❌ QR failed!` + FOOTER);
-                    }
-                    break;
-                }
-
-                // Weather
-                case 'weather': {
-                    const city = args.join(' ');
-                    if (!city) return reply(`⚠️ Usage: .weather [city]` + FOOTER);
-                    
-                    try {
-                        const res = await axios.get(`https://wttr.in/${encodeURIComponent(city)}?format=j1`, { timeout: 15000 });
-                        const data = res.data;
-                        
-                        const current = data.current_condition[0];
-                        const area = data.nearest_area[0];
-                        
-                        await reply(`🌍 *WEATHER REPORT*
-
-📍 *City:* ${area.areaName[0].value}
-🌍 *Country:* ${area.country[0].value}
-🌡️ *Temp:* ${current.temp_C}°C
-☁️ *Condition:* ${current.weatherDesc[0].value}
-💧 *Humidity:* ${current.humidity}%
-💨 *Wind:* ${current.windspeedKmph} km/h` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Weather failed!` + FOOTER);
-                    }
-                    break;
-                }
-
-                // Password
-                case 'password':
-                case 'genpass': {
-                    const length = parseInt(args[0]) || 16;
-                    if (length < 4 || length > 64) return reply(`⚠️ Length 4-64!` + FOOTER);
-                    
-                    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=';
-                    let password = '';
-                    
-                    for (let i = 0; i < length; i++) {
-                        password += chars.charAt(Math.floor(Math.random() * chars.length));
-                    }
-                    
-                    await reply(`🔐 *PASSWORD*\n\n\`${password}\`\n\n📏 Length: ${length}` + FOOTER);
-                    break;
-                }
-
-                // Short URL
-                case 'short':
-                case 'shorturl': {
-                    const url = args[0];
-                    if (!url) return reply(`⚠️ Usage: .short [URL]` + FOOTER);
-                    
-                    try {
-                        const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`, { timeout: 10000 });
-                        await reply(`🔗 *SHORT URL*\n\n📎 *Original:* ${url}\n✂️ *Short:* ${res.data}` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed!` + FOOTER);
-                    }
-                    break;
-                }
-
-                // Screenshot
-                case 'screenshot':
-                case 'ss': {
-                    const url = args[0];
-                    if (!url) return reply(`⚠️ Usage: .ss [URL]` + FOOTER);
-                    
-                    try {
-                        const ssUrl = `https://api.microlink.io/?url=${encodeURIComponent(url)}&screenshot=true&meta=false&embed=screenshot.url`;
-                        
-                        await socket.sendMessage(sender, {
-                            image: { url: ssUrl },
-                            caption: `📸 *Screenshot*` + FOOTER,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-                    } catch (e) {
-                        try {
-                            const fallbackUrl = `https://image.thum.io/get/width/1200/${url}`;
-                            await socket.sendMessage(sender, {
-                                image: { url: fallbackUrl },
-                                caption: `📸 *Screenshot*` + FOOTER,
-                                contextInfo: channelInfo
-                            }, { quoted: msg });
-                        } catch (e2) {
-                            await reply(`❌ Screenshot failed!` + FOOTER);
-                        }
-                    }
-                    break;
-                }
-
-                // Time/Date
-                case 'time':
-                case 'date': {
-                    const now = new Date();
-                    const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Colombo', hour12: true });
-                    const dateStr = now.toLocaleDateString('en-US', { timeZone: 'Asia/Colombo', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-                    
-                    await reply(`🕐 *DATE & TIME*\n\n📅 *Date:* ${dateStr}\n⏰ *Time:* ${timeStr}\n🌍 *Timezone:* Sri Lanka` + FOOTER);
-                    break;
-                }
-
-                // Whois
-                case 'whois':
-                case 'userinfo': {
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    const targetJid = quoted?.participant || msg.key.participant || sender;
-                    
-                    try {
-                        const ppUrl = await socket.profilePictureUrl(targetJid, 'image').catch(() => null);
-                        const status = await socket.fetchStatus(targetJid).catch(() => null);
-                        
-                        const infoText = `👤 *USER INFORMATION*
-
-📱 *Number:* ${targetJid.split('@')[0]}
-🆔 *JID:* \`${targetJid}\`
-💭 *Status:* ${status?.status || 'Hidden'}
-🖼️ *Profile Pic:* ${ppUrl ? 'Visible' : 'Hidden'}` + FOOTER;
-                        
-                        if (ppUrl) {
-                            await socket.sendMessage(sender, {
-                                image: { url: ppUrl },
-                                caption: infoText,
-                                contextInfo: channelInfo
-                            }, { quoted: msg });
-                        } else {
-                            await reply(infoText);
-                        }
-                    } catch (e) {
-                        await reply(`❌ Info failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // FakeChat
-                case 'fakechat': {
-                    const text = args.join(' ');
-                    if (!text || !text.includes('|')) {
-                        return reply(`⚠️ Usage: .fakechat Name|Message` + FOOTER);
-                    }
-                    
-                    const [name, ...msgParts] = text.split('|');
-                    const message = msgParts.join('|');
-                    
-                    await reply(`📱 Generating fake chat... ⏳` + FOOTER);
-                    
-                    const imageBuffer = await generateFakeChat(name, message);
-                    
-                    if (!imageBuffer) {
-                        return reply(`❌ Fake chat failed! Try again.` + FOOTER);
-                    }
-                    
-                    try {
-                        await socket.sendMessage(sender, {
-                            image: imageBuffer,
-                            caption: `📱 *Fake Chat Generated*` + FOOTER,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-                    } catch (e) {
-                        await reply(`❌ Failed to send: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // TAGALL
-                case 'tagall':
-                case 'all': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    
-                    try {
-                        const meta = await socket.groupMetadata(sender);
-                        const customMsg = args.join(' ') || 'Attention everyone!';
-                        let tagText = `📢 *${customMsg}*\n\n`;
-                        const mentions = [];
-                        
-                        meta.participants.forEach((p, i) => {
-                            tagText += `${i+1}. @${p.id.split('@')[0]}\n`;
-                            mentions.push(p.id);
-                        });
-                        
-                        tagText += FOOTER;
-                        
-                        await socket.sendMessage(sender, {
-                            text: tagText,
-                            mentions: mentions,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
                 // ==========================================
-                // GETCONTACT - Rate Limit Protection
-                // ==========================================
-                case 'getcontact':
-                case 'gc': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    
-                    const lockKey = number;
-                    const existingLock = getContactLocks.get(lockKey);
-                    if (existingLock?.running) {
-                        return reply(`⏳ *GetContact already running!*
-
-📊 *Progress:* ${existingLock.sent} sent
-⏱️ *Started:* ${Math.floor((Date.now() - existingLock.startTime) / 1000)}s ago
-
-💡 Please wait for it to finish!` + FOOTER);
-                    }
-                    
-                    try {
-                        const meta = await socket.groupMetadata(sender);
-                        const botJid = socket.user.id.split(':')[0] + '@s.whatsapp.net';
-                        
-                        const members = meta.participants
-                            .filter(p => p.id !== botJid && p.id !== msg.key.participant)
-                            .map(p => p.id);
-                        
-                        if (members.length === 0) {
-                            return reply(`❌ No members to message!` + FOOTER);
-                        }
-                        
-                        const MAX_SAFE = 50;
-                        const targetMembers = members.slice(0, MAX_SAFE);
-                        const skipped = members.length - targetMembers.length;
-                        
-                        const estTime = Math.ceil(targetMembers.length * 10 / 60);
-                        
-                        await reply(`📱 *STARTING GETCONTACT (SAFE MODE)*
-
-📊 *Members Found:* ${members.length}
-🎯 *Will Message:* ${targetMembers.length}
-${skipped > 0 ? `⚠️ *Skipped (safe limit):* ${skipped}\n` : ''}⏱️ *Est. Time:* ~${estTime} min
-🛡️ *Ban Protection:* ENABLED
-
-💡 *Safety Features:*
-• Random 10-15s delays
-• 60s break every 5 msgs
-• Max ${MAX_SAFE} messages per run
-• Rate limit detection
-
-⚠️ *Do NOT run other bulk commands!*` + FOOTER);
-                        
-                        getContactLocks.set(lockKey, {
-                            running: true,
-                            sent: 0,
-                            startTime: Date.now()
-                        });
-                        
-                        const messages = [
-                            'Hi 👋',
-                            'Hello 👋',
-                            'Mk 😊',
-                            'Hey there!',
-                            'Good day!',
-                            'Hi! How are you?'
-                        ];
-                        
-                        let sent = 0;
-                        let failed = 0;
-                        let rateLimited = false;
-                        
-                        for (let i = 0; i < targetMembers.length; i++) {
-                            const memberJid = targetMembers[i];
-                            if (memberJid === botJid) continue;
-                            
-                            if (rateLimited) {
-                                console.log(`[GETCONTACT] ⛔ Stopped early due to rate limit`);
-                                break;
-                            }
-                            
-                            try {
-                                const randomMsg = messages[Math.floor(Math.random() * messages.length)];
-                                
-                                await sendWithTyping(socket, memberJid, {
-                                    text: randomMsg + FOOTER,
-                                    contextInfo: getChannelContext()
-                                });
-                                
-                                sent++;
-                                const lock = getContactLocks.get(lockKey);
-                                if (lock) lock.sent = sent;
-                                
-                                console.log(`[GETCONTACT] ✅ ${sent}/${targetMembers.length} - ${memberJid}`);
-                                
-                                const randomDelay = Math.floor(Math.random() * 5000) + 10000;
-                                await delay(randomDelay);
-                                
-                                if (sent % 5 === 0 && sent < targetMembers.length) {
-                                    console.log(`[GETCONTACT] ☕ Taking 60s break after ${sent} messages`);
-                                    await delay(60000);
-                                }
-                                
-                            } catch (err) {
-                                failed++;
-                                const errMsg = (err.message || '').toLowerCase();
-                                console.log(`[GETCONTACT] ❌ Failed ${memberJid}: ${err.message}`);
-                                
-                                if (errMsg.includes('rate') || 
-                                    errMsg.includes('limit') ||
-                                    errMsg.includes('too many') ||
-                                    errMsg.includes('spam') ||
-                                    errMsg.includes('block')) {
-                                    
-                                    console.log('[GETCONTACT] 🚨 RATE LIMIT DETECTED! Stopping...');
-                                    rateLimited = true;
-                                    break;
-                                }
-                                
-                                await delay(15000);
-                            }
-                        }
-                        
-                        getContactLocks.delete(lockKey);
-                        
-                        const finalMsg = rateLimited 
-                            ? `⚠️ *GETCONTACT STOPPED (Rate Limit)*
-
-📊 *Results:*
-✅ *Sent:* ${sent}
-❌ *Failed:* ${failed}
-📱 *Total:* ${targetMembers.length}
-
-🚨 *WhatsApp rate limit detected!*
-💡 *Wait 24 hours before trying again!*`
-                            : `✅ *GETCONTACT COMPLETE!*
-
-📊 *Results:*
-✅ *Sent:* ${sent}
-❌ *Failed:* ${failed}
-📱 *Total:* ${targetMembers.length}
-${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
-💡 *Note:* Some users may not receive messages due to privacy settings.`;
-                        
-                        await reply(finalMsg + FOOTER);
-                        
-                    } catch (e) {
-                        getContactLocks.delete(lockKey);
-                        console.error('[GETCONTACT] Error:', e);
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // KICK
-                case 'kick': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    if (!quoted?.participant) return reply(`⚠️ Reply to a user!` + FOOTER);
-                    
-                    try {
-                        await socket.groupParticipantsUpdate(sender, [quoted.participant], 'remove');
-                        await reply(`✅ User kicked!` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // PROMOTE
-                case 'promote': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    if (!quoted?.participant) return reply(`⚠️ Reply to a user!` + FOOTER);
-                    
-                    try {
-                        await socket.groupParticipantsUpdate(sender, [quoted.participant], 'promote');
-                        await reply(`✅ User promoted!` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // DEMOTE
-                case 'demote': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    if (!quoted?.participant) return reply(`⚠️ Reply to a user!` + FOOTER);
-                    
-                    try {
-                        await socket.groupParticipantsUpdate(sender, [quoted.participant], 'demote');
-                        await reply(`✅ User demoted!` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // MUTE
-                case 'mute': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    try {
-                        await socket.groupSettingUpdate(sender, 'announcement');
-                        await reply(`🔇 Group muted!` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // UNMUTE
-                case 'unmute': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    try {
-                        await socket.groupSettingUpdate(sender, 'not_announcement');
-                        await reply(`🔊 Group unmuted!` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // GROUP INFO
-                case 'ginfo':
-                case 'groupinfo': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    try {
-                        const meta = await socket.groupMetadata(sender);
-                        const admins = meta.participants.filter(p => p.admin);
-                        
-                        let ppUrl = null;
-                        try { ppUrl = await socket.profilePictureUrl(sender, 'image'); } catch (e) {}
-                        
-                        const infoText = `📊 *GROUP INFORMATION*
-
-📝 *Name:* ${meta.subject}
-🆔 *JID:* \`${meta.id}\`
-👑 *Members:* ${meta.participants.length}
-👑 *Admins:* ${admins.length}
-📅 *Created:* ${new Date(meta.creation * 1000).toLocaleDateString()}
-📝 *Desc:* ${meta.desc || 'No description'}` + FOOTER;
-                        
-                        if (ppUrl) {
-                            await socket.sendMessage(sender, {
-                                image: { url: ppUrl },
-                                caption: infoText,
-                                contextInfo: channelInfo
-                            }, { quoted: msg });
-                        } else {
-                            await reply(infoText);
-                        }
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // QUOTE
-                case 'quote': {
-                    const quotes = [
-                        "The only way to do great work is to love what you do. - Steve Jobs",
-                        "Innovation distinguishes between a leader and a follower. - Steve Jobs",
-                        "Life is what happens when you're busy making other plans. - John Lennon",
-                        "The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt",
-                        "It is during our darkest moments that we must focus to see the light. - Aristotle",
-                        "The best time to plant a tree was 20 years ago. The second best time is now.",
-                        "Don't watch the clock; do what it does. Keep going. - Sam Levenson",
-                        "Your time is limited, don't waste it living someone else's life. - Steve Jobs"
-                    ];
-                    
-                    const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
-                    await reply(`💭 *DAILY QUOTE*\n\n${randomQuote}` + FOOTER);
-                    break;
-                }
-
-                // DICE
-                case 'dice': {
-                    const dice = Math.floor(Math.random() * 6) + 1;
-                    await reply(`🎲 *DICE ROLL*\n\nYou got: *${dice}*` + FOOTER);
-                    break;
-                }
-
-                // FLIP
-                case 'flip':
-                case 'coin': {
-                    const result = Math.random() < 0.5 ? 'Heads 🪙' : 'Tails 🪙';
-                    await reply(`🪙 *COIN FLIP*\n\nResult: *${result}*` + FOOTER);
-                    break;
-                }
-
-                // JOKE
-                case 'joke': {
-                    try {
-                        const res = await axios.get('https://official-joke-api.appspot.com/random_joke', { timeout: 10000 });
-                        await reply(`😂 *JOKE*\n\n${res.data.setup}\n\n${res.data.punchline}` + FOOTER);
-                    } catch (e) {
-                        const jokes = [
-                            "Why don't scientists trust atoms? Because they make up everything!",
-                            "What do you call a fake noodle? An impasta!",
-                            "Why did the scarecrow win an award? He was outstanding in his field!"
-                        ];
-                        await reply(`😂 *JOKE*\n\n${jokes[Math.floor(Math.random() * jokes.length)]}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // SINHALA JOKE
-                case 'sijoke': {
-                    const sijokes = [
-                        "මිනිහෙක් දුවලා ගිහින් කිව්වලු 'ඔයාට බත් දෙන්න' කියලා. ගිහින් කිව්වා 'කොහොමද මේ?' මිනිහා කිව්වා 'වහලේ ගහන්න' කියලා 😂",
-                        "ගුරුවරයා: 'ඔය මොකද මේ පන්තියේ නිදාගන්නේ?' ළමයා: 'සර් මම සිහිනෙන් ඉගෙන ගන්නවා' 😅",
-                        "එක මිනිහෙක් දොස්තරට කිව්වා 'මට කන්න බෑ' කියලා. දොස්තර කිව්වා 'මොකද?' මිනිහා කිව්වා 'කට ඇරියම කෑම එලියට වැටෙනවා' 🤣"
-                    ];
-                    
-                    await reply(`😂 *සිංහල ජෝක්*\n\n${sijokes[Math.floor(Math.random() * sijokes.length)]}` + FOOTER);
-                    break;
-                }
-
-                // RANDOM
-                case 'random': {
-                    const min = parseInt(args[0]) || 1;
-                    const max = parseInt(args[1]) || 100;
-                    const random = Math.floor(Math.random() * (max - min + 1)) + min;
-                    await reply(`🔢 *RANDOM NUMBER*\n\nRange: ${min} - ${max}\nResult: *${random}*` + FOOTER);
-                    break;
-                }
-
-                // IP
-                case 'ip': {
-                    const target = args[0];
-                    if (!target) return reply(`⚠️ Usage: .ip [domain]` + FOOTER);
-                    
-                    try {
-                        const res = await axios.get(`http://ip-api.com/json/${target}`, { timeout: 10000 });
-                        const data = res.data;
-                        
-                        if (data.status !== 'success') return reply(`❌ Lookup failed!` + FOOTER);
-                        
-                        await reply(`🌐 *IP INFO*
-
-📍 *Target:* ${target}
-🌍 *Country:* ${data.country}
-🏙️ *City:* ${data.city}
-🌐 *ISP:* ${data.isp}
-🕐 *Timezone:* ${data.timezone}` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed!` + FOOTER);
-                    }
-                    break;
-                }
-
-                // BASE64
-                case 'base64':
-                case 'b64': {
-                    const mode = args[0]?.toLowerCase();
-                    const text = args.slice(1).join(' ');
-                    
-                    if (!mode || !text) {
-                        return reply(`⚠️ Usage:\n.base64 encode [text]\n.base64 decode [text]` + FOOTER);
-                    }
-                    
-                    try {
-                        if (mode === 'encode' || mode === 'enc') {
-                            const encoded = Buffer.from(text).toString('base64');
-                            await reply(`🔐 *ENCODED*\n\n\`${encoded}\`` + FOOTER);
-                        } else if (mode === 'decode' || mode === 'dec') {
-                            const decoded = Buffer.from(text, 'base64').toString('utf8');
-                            await reply(`🔓 *DECODED*\n\n${decoded}` + FOOTER);
-                        }
-                    } catch (e) {
-                        await reply(`❌ Error!` + FOOTER);
-                    }
-                    break;
-                }
-
-                // ==========================================
-                // 🔧 FIXED: TTS COMMAND - Phone Playable
+                // 🎤 TTS
                 // ==========================================
                 case 'tts':
                 case 'say': {
                     const text = args.join(' ');
                     if (!text) return reply(`⚠️ Usage: .tts [text]` + FOOTER);
-                    
+
                     try {
                         await reply(`🎤 Generating voice... ⏳` + FOOTER);
-                        
-                        // Split text if too long (Google TTS limit ~200 chars)
+
                         const maxLen = 180;
                         const textChunks = [];
                         if (text.length > maxLen) {
@@ -2376,621 +1552,227 @@ ${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
                         } else {
                             textChunks.push(text);
                         }
-                        
-                        for (const chunk of textChunks) {
-                            const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunk)}&tl=en&client=tw-ob&total=${textChunks.length}&idx=${textChunks.indexOf(chunk)}&textlen=${chunk.length}`;
-                            
-                            const response = await axios.get(ttsUrl, { 
-                                responseType: 'arraybuffer', 
+
+                        for (let i = 0; i < textChunks.length; i++) {
+                            const chunk = textChunks[i];
+                            const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunk)}&tl=en&client=tw-ob&total=${textChunks.length}&idx=${i}&textlen=${chunk.length}`;
+
+                            const response = await axios.get(ttsUrl, {
+                                responseType: 'arraybuffer',
                                 timeout: 20000,
                                 headers: {
                                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                                    'Referer': 'https://translate.google.com/',
-                                    'Accept': 'audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.5',
-                                    'Accept-Language': 'en-US,en;q=0.9'
+                                    'Referer': 'https://translate.google.com/'
                                 }
                             });
-                            
+
                             const mp3Buffer = Buffer.from(response.data);
-                            
-                            if (mp3Buffer.length < 500) {
-                                console.log('[TTS] Response too small, might be error');
-                                continue;
-                            }
-                            
-                            // 🔧 KEY FIX: Convert MP3 → OGG Opus (WhatsApp voice note format)
+                            if (mp3Buffer.length < 500) continue;
+
                             const opusBuffer = await convertTtsToOpus(mp3Buffer);
-                            
-                            if (!opusBuffer || opusBuffer.length < 500) {
-                                console.log('[TTS] Opus conversion failed, sending MP3 instead');
-                                // Fallback: send MP3 as voice note
-                                await socket.sendMessage(sender, {
-                                    audio: mp3Buffer,
-                                    mimetype: 'audio/mpeg',
-                                    ptt: true,
-                                    contextInfo: channelInfo
-                                }, { quoted: msg });
-                            } else {
-                                // Send as proper WhatsApp voice note (OGG Opus)
+
+                            if (opusBuffer && opusBuffer.length > 500) {
                                 await socket.sendMessage(sender, {
                                     audio: opusBuffer,
                                     mimetype: 'audio/ogg; codecs=opus',
                                     ptt: true,
                                     contextInfo: channelInfo
                                 }, { quoted: msg });
-                                console.log(`[TTS] ✅ Sent voice note (${opusBuffer.length} bytes)`);
+                            } else {
+                                await socket.sendMessage(sender, {
+                                    audio: mp3Buffer,
+                                    mimetype: 'audio/mpeg',
+                                    ptt: true,
+                                    contextInfo: channelInfo
+                                }, { quoted: msg });
                             }
-                            
-                            // Small delay between chunks
+
                             if (textChunks.length > 1) await delay(1000);
                         }
-                        
                     } catch (e) {
-                        console.error('[TTS] Error:', e);
                         await reply(`❌ TTS failed: ${e.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // CRYPTO
-                case 'crypto':
-                case 'price': {
-                    let coin = args[0]?.toLowerCase();
-                    if (!coin) return reply(`⚠️ Usage: .crypto [coin]\nExample: .crypto btc` + FOOTER);
-                    
-                    const coinMap = {
-                        'btc': 'bitcoin', 'eth': 'ethereum', 'bnb': 'binancecoin',
-                        'xrp': 'ripple', 'doge': 'dogecoin', 'ada': 'cardano',
-                        'sol': 'solana', 'matic': 'matic-network', 'dot': 'polkadot',
-                        'ltc': 'litecoin', 'trx': 'tron', 'shib': 'shiba-inu'
-                    };
-                    
-                    if (coinMap[coin]) coin = coinMap[coin];
-                    
-                    try {
-                        const res = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${coin}&vs_currencies=usd,lkr&include_24hr_change=true`, { timeout: 15000 });
-                        const data = res.data[coin];
-                        
-                        if (!data) return reply(`❌ Coin not found! Try: btc, eth, bnb, xrp, doge, ada, sol` + FOOTER);
-                        
-                        const change = data.usd_24h_change?.toFixed(2) || 0;
-                        const emoji = change >= 0 ? '📈' : '📉';
-                        
-                        await reply(`💰 *${coin.toUpperCase()} PRICE*
-
-💵 *USD:* $${data.usd?.toLocaleString() || 'N/A'}
-🇱🇰 *LKR:* Rs. ${data.lkr?.toLocaleString() || 'N/A'}
-${emoji} *24h:* ${change}%` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Failed: ${e.message}` + FOOTER);
-                    }
+                // AI
+                case 'ai':
+                case 'gpt': {
+                    const query = args.join(' ');
+                    if (!query) return reply(`⚠️ Provide a question!` + FOOTER);
+                    await reply(`🤖 Thinking... 🤔` + FOOTER);
+                    const answer = await askAI(query);
+                    if (!answer) return reply(`❌ AI failed!` + FOOTER);
+                    await reply(`🤖 *AI*\n\n${answer.trim()}` + FOOTER);
                     break;
                 }
 
-                // URL INFO
-                case 'urlinfo':
-                case 'preview': {
-                    const url = args[0];
-                    if (!url) return reply(`⚠️ Usage: .urlinfo [URL]` + FOOTER);
-                    
-                    try {
-                        const res = await axios.get(`https://api.microlink.io?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-                        const data = res.data.data;
-                        
-                        let info = `🔗 *URL INFO*\n\n`;
-                        info += `📝 *Title:* ${data.title || 'N/A'}\n`;
-                        info += `📄 *Desc:* ${data.description || 'N/A'}\n`;
-                        info += `🌐 *Site:* ${data.publisher || 'N/A'}\n`;
-                        info += FOOTER;
-                        
-                        if (data.image?.url) {
-                            await socket.sendMessage(sender, {
-                                image: { url: data.image.url },
-                                caption: info,
-                                contextInfo: channelInfo
-                            }, { quoted: msg });
-                        } else {
-                            await reply(info);
-                        }
-                    } catch (e) {
-                        await reply(`❌ Failed!` + FOOTER);
-                    }
+                // IMAGINE
+                case 'imagine':
+                case 'aiimage': {
+                    const prompt = args.join(' ');
+                    if (!prompt) return reply(`⚠️ Usage: .imagine [prompt]` + FOOTER);
+                    await reply(`🎨 Generating... ⏳` + FOOTER);
+                    const imageUrl = await generateAIImage(prompt);
+                    if (!imageUrl) return reply(`❌ Failed!` + FOOTER);
+                    await socket.sendMessage(sender, {
+                        image: { url: imageUrl },
+                        caption: `🎨 *AI Image*\n\n📝 ${prompt}` + FOOTER,
+                        contextInfo: channelInfo
+                    }, { quoted: msg });
                     break;
                 }
 
-                // TEXT TO IMAGE
-                case 'textimg':
-                case 'tim': {
+                // FAKECHAT
+                case 'fakechat': {
                     const text = args.join(' ');
-                    if (!text) return reply(`⚠️ Usage: .textimg [text]` + FOOTER);
-                    
-                    try {
-                        const imgUrl = `https://api.siputzx.my.id/api/m/textpro?text=${encodeURIComponent(text)}&theme=neon`;
-                        
-                        await socket.sendMessage(sender, {
-                            image: { url: imgUrl },
-                            caption: `🎨 *Text Image*` + FOOTER,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-                    } catch (e) {
-                        await reply(`❌ Failed!` + FOOTER);
-                    }
+                    if (!text || !text.includes('|')) return reply(`⚠️ Usage: .fakechat Name|Message` + FOOTER);
+                    const [name, ...msgParts] = text.split('|');
+                    const message = msgParts.join('|');
+                    await reply(`📱 Generating... ⏳` + FOOTER);
+                    const buf = await generateFakeChat(name, message);
+                    if (!buf) return reply(`❌ Failed!` + FOOTER);
+                    await socket.sendMessage(sender, {
+                        image: buf,
+                        caption: `📱 *Fake Chat*` + FOOTER,
+                        contextInfo: channelInfo
+                    }, { quoted: msg });
                     break;
                 }
 
-                // CHECK NUMBER
-                case 'check':
-                case 'numbercheck': {
-                    const phone = args[0];
-                    if (!phone) return reply(`⚠️ Usage: .check [phone]` + FOOTER);
-                    
-                    try {
-                        const cleanPhone = phone.replace(/[^0-9]/g, '');
-                        const jid = `${cleanPhone}@s.whatsapp.net`;
-                        
-                        const [result] = await socket.onWhatsApp(jid);
-                        
-                        if (result?.exists) {
-                            let ppUrl = null;
-                            try { ppUrl = await socket.profilePictureUrl(jid, 'image'); } catch (e) {}
-                            
-                            await reply(`✅ *EXISTS ON WHATSAPP!*
-
-📱 *Number:* ${cleanPhone}
-🖼️ *Profile Pic:* ${ppUrl ? 'Visible' : 'Hidden'}` + FOOTER);
-                        } else {
-                            await reply(`❌ NOT on WhatsApp!` + FOOTER);
-                        }
-                    } catch (e) {
-                        await reply(`❌ Failed!` + FOOTER);
-                    }
-                    break;
-                }
-
-                // SETREPLY
-                case 'setreply': {
+                // Pair
+                case 'pair':
+                case 'paircode': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const trigger = args[0]?.toLowerCase();
-                    const response = args.slice(1).join(' ');
-                    
-                    if (!trigger || !response) {
-                        return reply(`⚠️ Usage: .setreply [trigger] [response]` + FOOTER);
-                    }
-                    
-                    global.customReplies = global.customReplies || {};
-                    global.customReplies[trigger] = response;
-                    
-                    await reply(`✅ Custom reply set!` + FOOTER);
-                    break;
-                }
-
-                // DELREPLY
-                case 'delreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const trigger = args[0]?.toLowerCase();
-                    if (!trigger) return reply(`⚠️ Usage: .delreply [trigger]` + FOOTER);
-                    
-                    global.customReplies = global.customReplies || {};
-                    delete global.customReplies[trigger];
-                    
-                    await reply(`✅ Removed: *${trigger}*` + FOOTER);
-                    break;
-                }
-
-                // LISTREPLY
-                case 'listreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    global.customReplies = global.customReplies || {};
-                    const triggers = Object.keys(global.customReplies);
-                    
-                    if (triggers.length === 0) {
-                        return reply(`📝 No custom replies!` + FOOTER);
-                    }
-                    
-                    let list = `📝 *CUSTOM REPLIES*\n\n`;
-                    triggers.forEach((t, i) => {
-                        list += `${i+1}. *${t}* → ${global.customReplies[t]}\n`;
-                    });
-                    
-                    await reply(list + FOOTER);
-                    break;
-                }
-
-                // NOTE
-                case 'note': {
-                    const action = args[0]?.toLowerCase();
-                    const noteName = args[1]?.toLowerCase();
-                    const noteContent = args.slice(2).join(' ');
-                    
-                    global.notes = global.notes || {};
-                    
-                    if (action === 'save') {
-                        if (!noteName || !noteContent) return reply(`⚠️ Usage: .note save [name] [content]` + FOOTER);
-                        global.notes[noteName] = noteContent;
-                        await reply(`✅ Note saved: *${noteName}*` + FOOTER);
-                    } else if (action === 'get') {
-                        if (!noteName) return reply(`⚠️ Usage: .note get [name]` + FOOTER);
-                        if (!global.notes[noteName]) return reply(`❌ Not found!` + FOOTER);
-                        await reply(`📝 *${noteName.toUpperCase()}*\n\n${global.notes[noteName]}` + FOOTER);
-                    } else if (action === 'list') {
-                        const notes = Object.keys(global.notes);
-                        if (notes.length === 0) return reply(`📝 No notes!` + FOOTER);
-                        await reply(`📝 *NOTES*\n\n${notes.map((n, i) => `${i+1}. ${n}`).join('\n')}` + FOOTER);
-                    } else if (action === 'del') {
-                        if (!noteName) return reply(`⚠️ Usage: .note del [name]` + FOOTER);
-                        delete global.notes[noteName];
-                        await reply(`✅ Deleted: *${noteName}*` + FOOTER);
-                    } else {
-                        await reply(`📝 *Note Commands*\n\n.note save [name] [content]\n.note get [name]\n.note list\n.note del [name]` + FOOTER);
-                    }
-                    break;
-                }
-
-                // REMIND
-                case 'remind':
-                case 'reminder': {
-                    const timeArg = args[0];
-                    const reminderText = args.slice(1).join(' ');
-                    
-                    if (!timeArg || !reminderText) {
-                        return reply(`⚠️ Usage: .remind [time] [message]` + FOOTER);
-                    }
-                    
-                    let ms = 0;
-                    if (timeArg.endsWith('s')) ms = parseInt(timeArg) * 1000;
-                    else if (timeArg.endsWith('m')) ms = parseInt(timeArg) * 60 * 1000;
-                    else if (timeArg.endsWith('h')) ms = parseInt(timeArg) * 60 * 60 * 1000;
-                    else ms = parseInt(timeArg) * 60 * 1000;
-                    
-                    if (isNaN(ms) || ms <= 0 || ms > 24 * 60 * 60 * 1000) {
-                        return reply(`⚠️ Invalid time! Max 24h` + FOOTER);
-                    }
-                    
-                    await reply(`⏰ Reminder set for ${timeArg}!` + FOOTER);
-                    
-                    setTimeout(async () => {
-                        try {
-                            await socket.sendMessage(sender, {
-                                text: `⏰ *REMINDER*\n\n${reminderText}` + FOOTER,
-                                mentions: [msg.key.participant || sender],
-                                contextInfo: channelInfo
-                            });
-                        } catch (e) {}
-                    }, ms);
-                    break;
-                }
-
-                // POLL
-                case 'poll': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    
-                    const pollText = args.join(' ');
-                    if (!pollText.includes('|')) {
-                        return reply(`⚠️ Usage: .poll Question|Option1|Option2` + FOOTER);
-                    }
-                    
-                    const parts = pollText.split('|');
-                    const question = parts[0];
-                    const options = parts.slice(1);
-                    
-                    if (options.length < 2) return reply(`⚠️ At least 2 options!` + FOOTER);
-                    
-                    let pollMsg = `📊 *POLL*\n\n❓ *${question}*\n\n`;
-                    options.forEach((opt, i) => {
-                        const emoji = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣'][i];
-                        pollMsg += `${emoji} ${opt}\n`;
-                    });
-                    pollMsg += `\n💡 *React to vote!*` + FOOTER;
-                    
-                    const sent = await socket.sendMessage(sender, { text: pollMsg, contextInfo: channelInfo });
-                    
-                    const emojis = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣'];
-                    for (let i = 0; i < options.length; i++) {
-                        await delay(500);
-                        await socket.sendMessage(sender, {
-                            react: { text: emojis[i], key: sent.key }
-                        });
-                    }
-                    break;
-                }
-
-                // BIRTHDAY
-                case 'birthday':
-                case 'bday': {
-                    const action = args[0]?.toLowerCase();
-                    global.birthdays = global.birthdays || {};
-                    
-                    if (action === 'set') {
-                        const date = args[1];
-                        if (!date || !date.includes('/')) return reply(`⚠️ Usage: .bday set DD/MM` + FOOTER);
-                        const userJid = msg.key.participant || sender;
-                        global.birthdays[userJid] = date;
-                        await reply(`🎂 Saved: *${date}*` + FOOTER);
-                    } else if (action === 'list') {
-                        const entries = Object.entries(global.birthdays);
-                        if (entries.length === 0) return reply(`🎂 No birthdays!` + FOOTER);
-                        
-                        let list = `🎂 *BIRTHDAYS*\n\n`;
-                        entries.forEach(([jid, date]) => {
-                            list += `• @${jid.split('@')[0]} → ${date}\n`;
-                        });
-                        
-                        await reply({
-                            text: list + FOOTER,
-                            mentions: entries.map(([jid]) => jid)
-                        });
-                    } else if (action === 'check') {
-                        const today = new Date();
-                        const todayStr = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}`;
-                        
-                        const birthdayPeople = Object.entries(global.birthdays).filter(([_, d]) => d === todayStr);
-                        
-                        if (birthdayPeople.length === 0) {
-                            await reply(`🎂 No birthdays today!` + FOOTER);
-                        } else {
-                            let msg2 = `🎉 *TODAY'S BIRTHDAYS* 🎉\n\n`;
-                            birthdayPeople.forEach(([jid]) => {
-                                msg2 += `🎂 @${jid.split('@')[0]}\n`;
-                            });
-                            await reply({
-                                text: msg2 + FOOTER,
-                                mentions: birthdayPeople.map(([jid]) => jid)
-                            });
-                        }
-                    } else {
-                        await reply(`🎂 *Birthday Commands*\n\n.bday set DD/MM\n.bday list\n.bday check` + FOOTER);
-                    }
-                    break;
-                }
-
-                // ANTI-LINK
-                case 'antilink': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    
-                    let isAdmin = msg.key.fromMe;
-                    if (!isAdmin) {
-                        try {
-                            const meta = await socket.groupMetadata(sender);
-                            const participant = meta.participants.find(p => p.id === msg.key.participant);
-                            isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
-                        } catch (e) {}
-                    }
-                    
-                    if (!isAdmin) return reply(`⚠️ Only admins!` + FOOTER);
-                    
-                    const val = args[0]?.toLowerCase();
-                    
-                    let current = groupAntiLink.get(sender);
-                    if (current === undefined || current === null) {
-                        let dbVal = null;
-                        try { dbVal = await get(`ANTILINK_${sender}`, number); } catch (e) {}
-                        if (!dbVal) {
-                            try { 
-                                const cleanKey = sender.replace(/[^0-9]/g, '');
-                                dbVal = await get(`ANTILINK_${cleanKey}`, number); 
-                            } catch (e) {}
-                        }
-                        current = dbVal || 'off';
-                        groupAntiLink.set(sender, current);
-                    }
-                    
-                    if (!val || !['on', 'off'].includes(val)) {
-                        return reply(`🔗 *ANTI-LINK STATUS*\n\n📊 *Current:* ${current === 'on' ? '✅ ON' : '❌ OFF'}\n\n*Usage:* .antilink on/off` + FOOTER);
-                    }
-                    
-                    groupAntiLink.set(sender, val);
-                    
+                    const targetNumber = args[0]?.replace(/[^0-9]/g, '');
+                    if (!targetNumber) return reply(`⚠️ Usage: .pair [number]` + FOOTER);
+                    await reply(`🔄 Generating Pair Code...\n\n📱 ${targetNumber}` + FOOTER);
                     try {
-                        await handleSettingUpdate(`ANTILINK_${sender}`, val, reply, number);
-                    } catch (e) {
-                        try {
-                            const cleanKey = sender.replace(/[^0-9]/g, '');
-                            await handleSettingUpdate(`ANTILINK_${cleanKey}`, val, reply, number);
-                        } catch (e2) {}
-                    }
-                    
-                    await reply(`✅ *Anti-Link ${val === 'on' ? 'ENABLED' : 'DISABLED'}*` + FOOTER);
-                    break;
-                }
-
-                // WELCOME
-                case 'welcome': {
-                    if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
-                    
-                    let isAdmin = msg.key.fromMe;
-                    if (!isAdmin) {
-                        try {
-                            const meta = await socket.groupMetadata(sender);
-                            const participant = meta.participants.find(p => p.id === msg.key.participant);
-                            isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
-                        } catch (e) {}
-                    }
-                    
-                    if (!isAdmin) return reply(`⚠️ Only admins!` + FOOTER);
-                    
-                    const val = args[0]?.toLowerCase();
-                    
-                    let current = groupWelcome.get(sender);
-                    if (current === undefined || current === null) {
-                        let dbVal = null;
-                        try { dbVal = await get(`WELCOME_${sender}`, number); } catch (e) {}
-                        if (!dbVal) {
-                            try { 
-                                const cleanKey = sender.replace(/[^0-9]/g, '');
-                                dbVal = await get(`WELCOME_${cleanKey}`, number); 
-                            } catch (e) {}
+                        const sessionDir = path.join(SESSION_BASE_PATH, `temp_session_${targetNumber}`);
+                        await fs.ensureDir(sessionDir);
+                        const { state: tempState, saveCreds: tempSaveCreds } = await useMultiFileAuthState(sessionDir);
+                        const tempLogger = pino({ level: 'silent' });
+                        const tempSock = makeWASocket({
+                            auth: { creds: tempState.creds, keys: makeCacheableSignalKeyStore(tempState.keys, tempLogger) },
+                            printQRInTerminal: false, logger: tempLogger, browser: Browsers.macOS('Safari')
+                        });
+                        tempSock.ev.on('creds.update', tempSaveCreds);
+                        if (!tempSock.authState.creds.registered) {
+                            await delay(3000);
+                            const code = await tempSock.requestPairingCode(targetNumber);
+                            const fmt = code?.match(/.{1,4}/g)?.join('-') || code;
+                            await reply(`✅ *PAIR CODE*\n\n📱 ${targetNumber}\n🔑 \`${fmt}\`\n\n💡 WhatsApp → Linked Devices` + FOOTER);
                         }
-                        current = dbVal || 'off';
-                        groupWelcome.set(sender, current);
-                    }
-                    
-                    if (!val || !['on', 'off'].includes(val)) {
-                        return reply(`👋 *WELCOME STATUS*\n\n📊 *Current:* ${current === 'on' ? '✅ ON' : '❌ OFF'}\n\n*Usage:* .welcome on/off` + FOOTER);
-                    }
-                    
-                    groupWelcome.set(sender, val);
-                    
-                    try {
-                        await handleSettingUpdate(`WELCOME_${sender}`, val, reply, number);
-                    } catch (e) {
-                        try {
-                            const cleanKey = sender.replace(/[^0-9]/g, '');
-                            await handleSettingUpdate(`WELCOME_${cleanKey}`, val, reply, number);
-                        } catch (e2) {}
-                    }
-                    
-                    await reply(`✅ *Welcome ${val === 'on' ? 'ENABLED' : 'DISABLED'}*` + FOOTER);
-                    break;
-                }
-
-                // VVP
-                case 'vvp':
-                case 'viewoncept': {
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    if (!quoted || !quoted.quotedMessage) {
-                        return reply(`⚠️ Reply to View Once media with *${prefix}vvp*` + FOOTER);
-                    }
-
-                    let qMsg = unwrapMessage(quoted.quotedMessage);
-                    if (!qMsg) {
-                        return reply(`⚠️ Could not read quoted message!` + FOOTER);
-                    }
-
-                    const mediaInfo = getMediaType(qMsg);
-                    if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) {
-                        return reply(`⚠️ Reply to View Once media!` + FOOTER);
-                    }
-
-                    const { type: messageType, data: mediaData } = mediaInfo;
-                    const downloadMsg = {
-                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
-                        message: { [messageType]: mediaData }
-                    };
-
-                    try {
-                        await reply(`⏳ Sending to owner privately...` + FOOTER);
-                        
-                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                        const innerMsg = mediaData;
-                        
-                        const ownerNumber = await getOwnerNumber(number);
-                        const senderName = (msg.key.participant || sender).split('@')[0];
-                        const ownerJid = `${ownerNumber}@s.whatsapp.net`;
-                        
-                        const caption = `📥 *VIEW ONCE RECEIVED*
-
-👤 *From:* @${senderName}
-📍 *Chat:* ${sender.includes('@g.us') ? 'Group' : 'Inbox'}
-🕐 *Time:* ${new Date().toLocaleString()}
-💬 *Caption:* ${innerMsg?.caption || 'No caption'}` + FOOTER;
-
-                        if (messageType === 'imageMessage') {
-                            await socket.sendMessage(ownerJid, {
-                                image: buffer,
-                                caption: caption,
-                                mentions: [msg.key.participant || sender],
-                                contextInfo: channelInfo
-                            });
-                        } else if (messageType === 'videoMessage') {
-                            await socket.sendMessage(ownerJid, {
-                                video: buffer,
-                                caption: caption,
-                                mentions: [msg.key.participant || sender],
-                                contextInfo: channelInfo
-                            });
-                        }
-                        
-                        await reply(`✅ *Sent to Owner (+${ownerNumber}) privately!*` + FOOTER);
-                        
+                        setTimeout(async () => {
+                            try { await tempSock.end(); } catch (e) {}
+                            try { await fs.remove(sessionDir); } catch (e) {}
+                        }, 60000);
                     } catch (err) {
-                        await reply(`❌ Failed: ${err.message}` + FOOTER);
+                        await reply(`❌ ${err.message}` + FOOTER);
                     }
                     break;
                 }
 
-                // VV
-                case 'vv':
-                case 'viewonce': {
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    if (!quoted || !quoted.quotedMessage) {
-                        return reply(`⚠️ Reply to View Once media with *${prefix}vv*` + FOOTER);
-                    }
-
-                    let qMsg = unwrapMessage(quoted.quotedMessage);
-                    if (!qMsg) {
-                        return reply(`⚠️ Could not read quoted message!` + FOOTER);
-                    }
-
-                    const mediaInfo = getMediaType(qMsg);
-                    if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) {
-                        return reply(`⚠️ Reply to View Once media!` + FOOTER);
-                    }
-
-                    const { type: messageType, data: mediaData } = mediaInfo;
-                    const downloadMsg = {
-                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
-                        message: { [messageType]: mediaData }
-                    };
-
+                // Active
+                case 'active':
+                case 'activeusers': {
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
                     try {
-                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                        const caption = `📥 *View Once Media*\n\n${mediaData?.caption || ''}` + FOOTER;
-
-                        if (messageType === 'imageMessage') {
-                            await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                        } else if (messageType === 'videoMessage') {
-                            await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                        }
-                    } catch (err) {
-                        await reply(`❌ Failed: ${err.message}` + FOOTER);
-                    }
+                        const allSessions = await Session.find({});
+                        const active = Array.from(activeSockets.keys());
+                        let t = `📊 *ACTIVE USERS*\n\n📱 Connected: ${active.length}\n💾 Sessions: ${allSessions.length}\n\n`;
+                        active.forEach((num, i) => {
+                            const start = socketCreationTime.get(num);
+                            const uptime = start ? Math.floor((Date.now() - start) / 1000) : 0;
+                            t += `${i + 1}. +${num} (${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m)\n`;
+                        });
+                        await reply(t + FOOTER);
+                    } catch (e) { await reply(`❌ ${e.message}` + FOOTER); }
                     break;
                 }
 
-                // MENU
+                // JID
+                case 'jid': {
+                    await reply(`📍 *JID INFO*\n\n💬 Chat: \`${msg.key.remoteJid}\`\n👤 Sender: \`${msg.key.participant || msg.key.remoteJid}\`` + FOOTER);
+                    break;
+                }
+
+                // Ping
+                case 'ping': {
+                    const start = Date.now();
+                    const sentMsg = await socket.sendMessage(sender, { text: 'Pinging...' }, { quoted: msg });
+                    const latency = Date.now() - start;
+                    await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*` + FOOTER }, { quoted: sentMsg });
+                    break;
+                }
+
+                // Runtime
+                case 'runtime': {
+                    const start = socketCreationTime.get(number) || Date.now();
+                    const uptime = Math.floor((Date.now() - start) / 1000);
+                    await reply(`⏱️ *Uptime:* ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s` + FOOTER);
+                    break;
+                }
+
+                // Owner
+                case 'owner': {
+                    await reply(`👑 *Bot Owner*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}` + FOOTER);
+                    break;
+                }
+
+                // Alive
+                case 'alive':
+                case 'status': {
+                    const start = socketCreationTime.get(number) || Date.now();
+                    const uptime = Math.floor((Date.now() - start) / 1000);
+                    await socket.sendMessage(sender, {
+                        image: { url: BOT_IMAGE_URL },
+                        caption: `👋 *${botName}* online!\n⏱️ ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s\n👨‍💻 Nimsara` + FOOTER,
+                        contextInfo: channelInfo
+                    }, { quoted: msg });
+                    break;
+                }
+
+                // Menu
                 case 'allmenu':
                 case 'menu':
                 case 'help': {
-                    const botName = await get('BOT_NAME', number) || 'NIM BOT';
+                    const bN = await get('BOT_NAME', number) || 'NIM BOT';
                     const isFollowing = await checkChannelFollow(socket, msg.key.participant || sender);
                     const followStatus = isFollowing ? '✅ Followed' : '❌ Not Followed';
 
                     const captionText = `
-*👋 ${botName.toUpperCase()} 🧃🇱🇰*
+*👋 ${bN.toUpperCase()} 🧃🇱🇰*
 *-- The Mini Whatsapp Bot Experience --*
 
-> Created By Nimsara 🧃🇱🇰
+> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻
 > 🪀 Contact - 0784280074
 
 ─────────────────────
 *BOT STATUS 👾*
-> Bot Name : ${botName}
+> Bot Name : ${bN}
 > Activers : ${activeSockets.size}
 > Channel : ${followStatus}
-> Bot Creator : NIMSARA
 ─────────────────────
 
 *╭─\`🎈 𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨 𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗜𝗘𝗦\`┤⭓*
 *┃*
-*┃ 1️⃣ - 📥 DOWNLOAD COMMANDS*
-*┃ 2️⃣ - ⚙️ SETTINGS COMMANDS*
-*┃ 3️⃣ - 👑 OWNER COMMANDS*
-*┃ 4️⃣ - 🛠️ UTILITY COMMANDS*
+*┃ 1️⃣ - 📥 DOWNLOAD*
+*┃ 2️⃣ - ⚙️ SETTINGS*
+*┃ 3️⃣ - 👑 OWNER*
+*┃ 4️⃣ - 🛠️ UTILITY*
 *┃ 5️⃣ - 🤖 AI & CONVERT*
 *┃ 6️⃣ - 👑 GROUP ADMIN*
-*┃ 7️⃣ - 🎮 FUN COMMANDS*
+*┃ 7️⃣ - 🎮 FUN*
 *┃*
 *╰──────────────────────*
 
 💡 *Reply to this message with a number!*
 
-🔗 Web: https://nimsara-official.vercel.app/
-*📢 FOLLOW CHANNEL :- ${BOT_CHANNEL_LINK}*
+> 🔗 Web: https://nimsara-official.vercel.app/
+> *📢 CHANNEL :- ${BOT_CHANNEL_LINK}*
 
-> _MADE BY NIMSARA_`;
+> _© ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻_`;
 
                     const sentMsg = await socket.sendMessage(sender, {
                         image: { url: BOT_IMAGE_URL },
@@ -3000,7 +1782,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 
                     if (sentMsg?.key?.id) {
                         menuMessageIds.set(sentMsg.key.id, { type: 'main', timestamp: Date.now() });
-                        
                         if (menuMessageIds.size > 100) {
                             const oldest = menuMessageIds.keys().next().value;
                             menuMessageIds.delete(oldest);
@@ -3008,7 +1789,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     }
 
                     await delay(1500);
-
                     const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
                     if (audioBuffer) {
                         await socket.sendMessage(sender, {
@@ -3021,147 +1801,68 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // Mode, Ping, etc.
+                // Mode
                 case 'mode': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    const option = args[0] ? args[0].toLowerCase() : '';
-                    const validModes = ['public', 'group', 'inbox', 'private'];
-                    if (!validModes.includes(option)) {
-                        const currentMode = await get('BOT_MODE', number) || 'public';
-                        return reply(`⚙️ *Bot Mode*\n\nCurrent: *${currentMode.toUpperCase()}*\n\nOptions:\n• .mode public\n• .mode group\n• .mode inbox\n• .mode private` + FOOTER);
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
+                    const option = args[0]?.toLowerCase();
+                    const valid = ['public', 'group', 'inbox', 'private'];
+                    if (!valid.includes(option)) {
+                        const cur = await get('BOT_MODE', number) || 'public';
+                        return reply(`⚙️ *Mode*\nCurrent: *${cur.toUpperCase()}*\n\nOptions: public, group, inbox, private` + FOOTER);
                     }
                     await handleSettingUpdate("BOT_MODE", option, reply, number);
                     break;
                 }
 
-                case 'ping': {
-                    const start = Date.now();
-                    const sentMsg = await socket.sendMessage(sender, { text: 'Pinging...' }, { quoted: msg });
-                    const latency = Date.now() - start;
-                    await socket.sendMessage(sender, { text: `🏓 Pong! *${latency}ms*` + FOOTER }, { quoted: sentMsg });
-                    break;
-                }
-
+                // Autoread / Autoreply / others
                 case 'autoread': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    const option = args[0] ? args[0].toLowerCase() : '';
-                    const validOptions = ['all', 'cmd', 'off'];
-                    if (!validOptions.includes(option)) {
-                        return reply(`👁️ *Auto-Read*\n\nCurrent: *${(global.autoReadStatus || 'off').toUpperCase()}*\n\nOptions:\n• .autoread all\n• .autoread cmd\n• .autoread off` + FOOTER);
-                    }
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
+                    const option = args[0]?.toLowerCase();
+                    const valid = ['all', 'cmd', 'off'];
+                    if (!valid.includes(option)) return reply(`👁️ *Auto-Read*\nCurrent: *${(global.autoReadStatus || 'off').toUpperCase()}*\n\nOptions: all, cmd, off` + FOOTER);
                     global.autoReadStatus = option;
-                    await reply(`✅ Auto-Read: *${global.autoReadStatus.toUpperCase()}*` + FOOTER);
+                    await reply(`✅ Auto-Read: *${option.toUpperCase()}*` + FOOTER);
                     break;
                 }
 
                 case 'autoreply': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    const option = args[0] ? args[0].toLowerCase() : '';
-                    const validOptions = ['all', 'inbox', 'group', 'off'];
-                    if (!validOptions.includes(option)) {
-                        return reply(`🤖 *Auto-Reply*\n\nCurrent: *${(global.autoReplyMode || 'off').toUpperCase()}*\n\nOptions:\n• .autoreply all\n• .autoreply inbox\n• .autoreply group\n• .autoreply off` + FOOTER);
-                    }
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
+                    const option = args[0]?.toLowerCase();
+                    const valid = ['all', 'inbox', 'group', 'off'];
+                    if (!valid.includes(option)) return reply(`🤖 *Auto-Reply*\nCurrent: *${(global.autoReplyMode || 'off').toUpperCase()}*\n\nOptions: all, inbox, group, off` + FOOTER);
                     global.autoReplyMode = option;
-                    await reply(`✅ Auto-Reply: *${global.autoReplyMode.toUpperCase()}*` + FOOTER);
+                    await reply(`✅ Auto-Reply: *${option.toUpperCase()}*` + FOOTER);
                     break;
                 }
 
-                case 'alive':
-                case 'status': {
-                    const startTime = socketCreationTime.get(number) || Date.now();
-                    const uptime = Math.floor((Date.now() - startTime) / 1000);
-                    const hours = Math.floor(uptime / 3600);
-                    const minutes = Math.floor((uptime % 3600) / 60);
-                    const seconds = Math.floor(uptime % 60);
-
-                    const aliveText = `👋 *${botName}* is online!\n⏱️ Uptime: ${hours}h ${minutes}m ${seconds}s\n👨‍💻 Creator: Nimsara` + FOOTER;
-
-                    await socket.sendMessage(sender, {
-                        image: { url: BOT_IMAGE_URL },
-                        caption: aliveText,
-                        contextInfo: channelInfo
-                    }, { quoted: msg });
-
-                    await delay(1500);
-
-                    const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
-                    if (audioBuffer) {
-                        await socket.sendMessage(sender, {
-                            audio: audioBuffer,
-                            mimetype: 'audio/mpeg',
-                            ptt: false,
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
-                    }
+                case 'autoview': {
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
+                    const val = args[0]?.toLowerCase();
+                    if (!val || !['on', 'off'].includes(val)) return reply(`⚠️ Usage: .autoview on/off` + FOOTER);
+                    await handleSettingUpdate("AUTO_VIEW_STATUS", val === 'on' ? 'true' : 'false', reply, number);
                     break;
                 }
 
-                case 'runtime': {
-                    const startTime = socketCreationTime.get(number) || Date.now();
-                    const uptime = Math.floor((Date.now() - startTime) / 1000);
-                    const hours = Math.floor(uptime / 3600);
-                    const minutes = Math.floor((uptime % 3600) / 60);
-                    const seconds = Math.floor(uptime % 60);
-                    await reply(`⏱️ *${botName} Uptime:* ${hours}h ${minutes}m ${seconds}s` + FOOTER);
+                case 'autolike': {
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
+                    const val = args[0]?.toLowerCase();
+                    if (!val || !['on', 'off'].includes(val)) return reply(`⚠️ Usage: .autolike on/off` + FOOTER);
+                    await handleSettingUpdate("AUTO_LIKE_STATUS", val === 'on' ? 'true' : 'false', reply, number);
                     break;
                 }
 
-                case 'owner': {
-                    await reply(`👑 *Bot Owner*\n> Name: Nimsara\n> Contact: 0784280074\n> Bot: ${botName}` + FOOTER);
-                    break;
-                }
-
-                case 'send':
-                case 'save': {
-                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
-                    if (!quoted || !quoted.quotedMessage) {
-                        return reply(`⚠️ Reply to media!` + FOOTER);
-                    }
-                    
-                    let qMsg = unwrapMessage(quoted.quotedMessage);
-                    if (!qMsg) {
-                        return reply(`⚠️ Could not read quoted message!` + FOOTER);
-                    }
-                    
-                    const mediaInfo = getMediaType(qMsg);
-                    if (!mediaInfo) {
-                        return reply(`⚠️ Reply to media!` + FOOTER);
-                    }
-                    
-                    const { type: messageType, data: mediaData } = mediaInfo;
-                    
-                    if (!['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(messageType)) {
-                        return reply(`⚠️ Reply to image/video/audio/document!` + FOOTER);
-                    }
-                    
-                    const downloadMsg = {
-                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
-                        message: { [messageType]: mediaData }
-                    };
-                    
-                    try {
-                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
-                        const caption = `${mediaData?.caption || ''}` + FOOTER;
-                        
-                        if (messageType === 'imageMessage') {
-                            await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                        } else if (messageType === 'videoMessage') {
-                            await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
-                        } else if (messageType === 'audioMessage') {
-                            await socket.sendMessage(sender, { audio: buffer, mimetype: 'audio/mpeg', ptt: mediaData?.ptt || false, contextInfo: channelInfo }, { quoted: msg });
-                        } else if (messageType === 'documentMessage') {
-                            await socket.sendMessage(sender, { document: buffer, mimetype: mediaData?.mimetype, fileName: mediaData?.fileName, contextInfo: channelInfo }, { quoted: msg });
-                        }
-                    } catch (err) {
-                        await reply(`❌ Failed: ${err.message}` + FOOTER);
-                    }
+                case 'alwaysonline': {
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
+                    const val = args[0]?.toLowerCase();
+                    if (!val || !['on', 'off'].includes(val)) return reply(`⚠️ Usage: .alwaysonline on/off` + FOOTER);
+                    await handleSettingUpdate("ALWAYS_ONLINE", val === 'on' ? 'true' : 'false', reply, number);
                     break;
                 }
 
                 case 'setprefix': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    if (!msg.key.fromMe && !isOwnerNumber(senderJid)) return reply(`⚠️ Only Owner!` + FOOTER);
                     const newPrefix = args[0];
-                    if (!newPrefix) return reply(`⚠️ Usage: .setprefix [New Prefix]` + FOOTER);
+                    if (!newPrefix) return reply(`⚠️ Usage: .setprefix [prefix]` + FOOTER);
                     await handleSettingUpdate("PREFIX", newPrefix, reply, number);
                     break;
                 }
@@ -3172,53 +1873,132 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const autoView = await get('AUTO_VIEW_STATUS', number) ?? 'true';
                     const autoLike = await get('AUTO_LIKE_STATUS', number) ?? 'true';
                     const alwaysOnline = await get('ALWAYS_ONLINE', number) ?? 'true';
+                    const autoSave = await get('AUTOSAVE_STATUS', number) || 'off';
 
-                    await reply(`⚙️ *${bName} SETTINGS*
-
-> Bot Name: *${bName}*
-> Prefix: *${pfx}*
-> Auto View: *${autoView}*
-> Auto Like: *${autoLike}*
-> Always Online: *${alwaysOnline}*
-
-🛠️ *Commands:*
-• ${pfx}autoview [on/off]
-• ${pfx}autolike [on/off]
-• ${pfx}alwaysonline [on/off]
-• ${pfx}setprefix [prefix]` + FOOTER);
+                    await reply(`⚙️ *${bName} SETTINGS*\n\n> Bot Name: *${bName}*\n> Prefix: *${pfx}*\n> Auto View: *${autoView}*\n> Auto Like: *${autoLike}*\n> Always Online: *${alwaysOnline}*\n> AutoSave: *${autoSave}*` + FOOTER);
                     break;
                 }
 
-                case 'autoview': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                // Nodelete
+                case 'nodelet':
+                case 'nodelete': {
                     const val = args[0]?.toLowerCase();
-                    if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .autoview on/off` + FOOTER);
+                    const targetChat = sender;
+                    if (sender.endsWith('@g.us')) {
+                        let isAdmin = msg.key.fromMe;
+                        if (!isAdmin) {
+                            try {
+                                const meta = await socket.groupMetadata(sender);
+                                const p = meta.participants.find(x => x.id === msg.key.participant);
+                                isAdmin = p?.admin === 'admin' || p?.admin === 'superadmin';
+                            } catch (e) {}
+                        }
+                        if (!isAdmin) return reply(`⚠️ Only admins!` + FOOTER);
+                    } else if (!msg.key.fromMe && !isOwnerNumber(senderJid)) {
+                        return reply(`⚠️ Only Owner!` + FOOTER);
                     }
-                    const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
-                    await handleSettingUpdate("AUTO_VIEW_STATUS", normalized, reply, number);
+
+                    let current = chatNodelete.get(targetChat);
+                    if (!current) {
+                        try { current = await get(`NODELETE_${targetChat}`, number); } catch (e) {}
+                        current = current || 'off';
+                        chatNodelete.set(targetChat, current);
+                    }
+
+                    if (!val || !['on', 'off'].includes(val)) {
+                        return reply(`🗑️ *NODELETE*\nCurrent: *${current === 'on' ? '✅ ON' : '❌ OFF'}*\n\nUsage: .nodelet on/off` + FOOTER);
+                    }
+
+                    chatNodelete.set(targetChat, val);
+                    try { await handleSettingUpdate(`NODELETE_${targetChat}`, val, reply, number); } catch (e) {}
+                    await reply(`✅ *NODELETE ${val.toUpperCase()}*` + FOOTER);
                     break;
                 }
 
-                case 'autolike': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    const val = args[0]?.toLowerCase();
-                    if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .autolike on/off` + FOOTER);
-                    }
-                    const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
-                    await handleSettingUpdate("AUTO_LIKE_STATUS", normalized, reply, number);
+                // Remsg
+                case 'remsg':
+                case 'delete': {
+                    const last = deletedMessages.get(sender);
+                    if (!last) return reply('❌ No deleted message!' + FOOTER);
+                    const senderJid2 = last.sender;
+                    const senderName = senderJid2.split('@')[0];
+                    await reply({
+                        text: `🗑️ *DELETED*\n\n👤 @${senderName}\n⏰ ${last.time}\n💬 ${last.text}` + FOOTER,
+                        mentions: [senderJid2]
+                    });
                     break;
                 }
 
-                case 'alwaysonline': {
-                    if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    const val = args[0]?.toLowerCase();
-                    if (!val || !['on', 'off', 'true', 'false'].includes(val)) {
-                        return reply(`⚠️ Usage: .alwaysonline on/off` + FOOTER);
+                // VVP
+                case 'vvp':
+                case 'viewoncept': {
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted?.quotedMessage) return reply(`⚠️ Reply to View Once media!` + FOOTER);
+
+                    let qMsg = unwrapMessage(quoted.quotedMessage);
+                    if (!qMsg) return reply(`⚠️ Could not read!` + FOOTER);
+
+                    const mediaInfo = getMediaType(qMsg);
+                    if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) {
+                        return reply(`⚠️ Reply to ViewOnce image/video!` + FOOTER);
                     }
-                    const normalized = (val === 'on' || val === 'true') ? 'true' : 'false';
-                    await handleSettingUpdate("ALWAYS_ONLINE", normalized, reply, number);
+
+                    const { type: messageType, data: mediaData } = mediaInfo;
+                    const downloadMsg = {
+                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
+                        message: { [messageType]: mediaData }
+                    };
+
+                    try {
+                        await reply(`⏳ Sending to owner...` + FOOTER);
+                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        const ownerNumber = await getOwnerNumber(number);
+                        const senderName = (msg.key.participant || sender).split('@')[0];
+                        const ownerJid = `${ownerNumber}@s.whatsapp.net`;
+                        const caption = `📥 *VIEW ONCE*\n\n👤 @${senderName}\n🕐 ${new Date().toLocaleString()}\n💬 ${mediaData?.caption || 'No caption'}` + FOOTER;
+
+                        if (messageType === 'imageMessage') {
+                            await socket.sendMessage(ownerJid, { image: buffer, caption, mentions: [msg.key.participant || sender], contextInfo: channelInfo });
+                        } else {
+                            await socket.sendMessage(ownerJid, { video: buffer, caption, mentions: [msg.key.participant || sender], contextInfo: channelInfo });
+                        }
+
+                        await reply(`✅ *Sent to Owner (+${ownerNumber})!*` + FOOTER);
+                    } catch (err) {
+                        await reply(`❌ ${err.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // VV
+                case 'vv':
+                case 'viewonce': {
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted?.quotedMessage) return reply(`⚠️ Reply to ViewOnce media!` + FOOTER);
+
+                    let qMsg = unwrapMessage(quoted.quotedMessage);
+                    if (!qMsg) return reply(`⚠️ Could not read!` + FOOTER);
+
+                    const mediaInfo = getMediaType(qMsg);
+                    if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) {
+                        return reply(`⚠️ Reply to ViewOnce image/video!` + FOOTER);
+                    }
+
+                    const { type: messageType, data: mediaData } = mediaInfo;
+                    const downloadMsg = {
+                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
+                        message: { [messageType]: mediaData }
+                    };
+
+                    try {
+                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        const caption = `📥 *View Once*\n\n${mediaData?.caption || ''}` + FOOTER;
+                        if (messageType === 'imageMessage') {
+                            await socket.sendMessage(sender, { image: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
+                        } else {
+                            await socket.sendMessage(sender, { video: buffer, caption, contextInfo: channelInfo }, { quoted: msg });
+                        }
+                    } catch (err) { await reply(`❌ ${err.message}` + FOOTER); }
                     break;
                 }
 
@@ -3226,56 +2006,43 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
             }
         } catch (error) {
-            console.error('Command execution error:', error);
+            console.error('Command error:', error);
         }
     });
 
-    // Welcome/Goodbye
+    // Group Welcome/Goodbye
     socket.ev.on('group-participants.update', async (update) => {
         try {
             const { id, participants, action } = update;
-            
             let welcomeEnabled = groupWelcome.get(id);
             if (!welcomeEnabled) {
-                let dbVal = null;
-                try { dbVal = await get(`WELCOME_${id}`, number); } catch (e) {}
-                if (!dbVal) {
-                    try { 
-                        const cleanKey = id.replace(/[^0-9]/g, '');
-                        dbVal = await get(`WELCOME_${cleanKey}`, number); 
-                    } catch (e) {}
-                }
-                welcomeEnabled = dbVal || 'off';
+                try { welcomeEnabled = await get(`WELCOME_${id}`, number); } catch (e) {}
+                welcomeEnabled = welcomeEnabled || 'off';
                 groupWelcome.set(id, welcomeEnabled);
             }
-            
             if (welcomeEnabled !== 'on') return;
-            
+
             const groupMeta = await socket.groupMetadata(id);
             const groupName = groupMeta.subject;
-            
-            for (const participant of participants) {
-                const userJid = participant;
-                const userName = userJid.split('@')[0];
-                
+
+            for (const p of participants) {
+                const userName = p.split('@')[0];
                 if (action === 'add') {
                     await socket.sendMessage(id, {
                         image: { url: BOT_IMAGE_URL },
-                        text: `🎉 *WELCOME* @${userName}!\n\n👋 Welcome to *${groupName}*\n\n📢 Please read group rules!` + FOOTER,
-                        mentions: [userJid],
+                        text: `🎉 *WELCOME* @${userName}!\n\n👋 Welcome to *${groupName}*` + FOOTER,
+                        mentions: [p],
                         contextInfo: getChannelContext()
                     });
                 } else if (action === 'remove') {
                     await socket.sendMessage(id, {
                         text: `👋 *GOODBYE* @${userName}!\n\n😢 We'll miss you!` + FOOTER,
-                        mentions: [userJid],
+                        mentions: [p],
                         contextInfo: getChannelContext()
                     });
                 }
             }
-        } catch (e) {
-            console.log("Group welcome error:", e.message);
-        }
+        } catch (e) {}
     });
 }
 
@@ -3287,9 +2054,7 @@ async function checkChannelFollow(socket, userJid) {
         const channelMeta = await socket.newsletterMetadata('jid', CHANNEL_JID);
         if (!channelMeta) return false;
         if (channelMeta.viewer_metadata) {
-            return channelMeta.viewer_metadata.role === 'ADMIN' || 
-                   channelMeta.viewer_metadata.role === 'OWNER' ||
-                   channelMeta.viewer_metadata.role === 'SUBSCRIBER';
+            return ['ADMIN', 'OWNER', 'SUBSCRIBER'].includes(channelMeta.viewer_metadata.role);
         }
         return false;
     } catch (e) {
@@ -3298,7 +2063,7 @@ async function checkChannelFollow(socket, userJid) {
 }
 
 // ==========================================
-// Status & Presence Handlers
+// Status & Presence
 // ==========================================
 function setupStatusAndPresenceHandlers(socket, number) {
     const getBotNumber = () => socket.user?.id ? socket.user.id.split(':')[0] : number;
@@ -3313,7 +2078,7 @@ function setupStatusAndPresenceHandlers(socket, number) {
                 } else {
                     await socket.sendPresenceUpdate('available');
                 }
-            } catch (e) { }
+            } catch (e) {}
         }
     });
 
@@ -3326,7 +2091,7 @@ function setupStatusAndPresenceHandlers(socket, number) {
             } else {
                 await socket.sendPresenceUpdate('available');
             }
-        } catch (e) { }
+        } catch (e) {}
     }, 60000);
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
@@ -3337,18 +2102,17 @@ function setupStatusAndPresenceHandlers(socket, number) {
             if (msg.key && msg.key.remoteJid === 'status@broadcast') {
                 const autoView = await get('AUTO_VIEW_STATUS', botNum);
                 if (autoView !== 'false' && autoView !== 'off') {
-                    try { await socket.readMessages([msg.key]); } catch (e) { }
+                    try { await socket.readMessages([msg.key]); } catch (e) {}
                 }
 
                 const autoLike = await get('AUTO_LIKE_STATUS', botNum);
                 if (autoLike === 'true' || autoLike === 'on') {
                     try {
                         const emojis = ['❤️', '🔦', '👌', '✨', '🤍', '🌝'];
-                        const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
                         await socket.sendMessage('status@broadcast', {
-                            react: { text: randomEmoji, key: msg.key }
+                            react: { text: emojis[Math.floor(Math.random() * emojis.length)], key: msg.key }
                         }, { statusJidList: [msg.key.participant] });
-                    } catch (e) { }
+                    } catch (e) {}
                 }
             }
         }
@@ -3356,40 +2120,27 @@ function setupStatusAndPresenceHandlers(socket, number) {
 }
 
 // ==========================================
-// Restore Existing Sessions
+// Restore Sessions
 // ==========================================
 async function restoreExistingSessions() {
     try {
-        console.log("🔍 Checking for existing sessions...");
         const allSessions = await Session.find({});
-        
-        if (allSessions.length === 0) {
-            console.log("⏹️ No existing sessions found.");
-            return;
-        }
-
-        console.log(`📋 Found ${allSessions.length} sessions. Restoring...`);
-
+        if (allSessions.length === 0) return;
+        console.log(`📋 Restoring ${allSessions.length} sessions...`);
         for (const session of allSessions) {
             if (session.number && session.creds && Object.keys(session.creds).length > 0) {
                 try {
                     if (activeSockets.has(session.number)) continue;
-                    console.log(`🔄 Restoring ${session.number}...`);
                     await StartBot(session.number, null, true);
                     await delay(2000);
-                } catch (e) {
-                    console.error(`❌ Failed ${session.number}:`, e.message);
-                }
+                } catch (e) {}
             }
         }
-        console.log("✅ Session restoration completed.");
-    } catch (e) {
-        console.error("❌ Error:", e.message);
-    }
+    } catch (e) {}
 }
 
 // ==========================================
-// Start Bot Function
+// Start Bot
 // ==========================================
 async function StartBot(number, res = null, isRestore = false) {
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
@@ -3424,36 +2175,18 @@ async function StartBot(number, res = null, isRestore = false) {
         const sendConnectMessage = async (currentSock, botNumber) => {
             if (connectMessageSent) return;
             connectMessageSent = true;
-
             try {
-                let botName = 'NIM BOT';
-                let currentPrefix = '.';
-                try {
-                    botName = await get('BOT_NAME', botNumber) || 'NIM BOT';
-                    currentPrefix = await get('PREFIX', botNumber) || '.';
-                } catch (e) { }
-
+                const botName = await get('BOT_NAME', botNumber) || 'NIM BOT';
+                const currentPrefix = await get('PREFIX', botNumber) || '.';
                 const ownJid = `${botNumber}@s.whatsapp.net`;
 
                 await currentSock.sendMessage(ownJid, {
                     image: { url: BOT_IMAGE_URL },
-                    caption: `🎉 *${botName} CONNECTED* 🎉
-
-✅ Your WhatsApp Bot is now online and active!
-
-• Name: *${botName}*
-• Number: *${botNumber}*
-• Prefix: *${currentPrefix}*
-
-Type *${currentPrefix}menu* to view commands.
-
-🔗 Channel: ${BOT_CHANNEL_LINK}
-> Creator: *Nimsara*`,
+                    caption: `🎉 *${botName} CONNECTED* 🎉\n\n✅ Bot is online!\n\n• Name: *${botName}*\n• Number: *${botNumber}*\n• Prefix: *${currentPrefix}*\n\nType *${currentPrefix}menu*\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻`,
                     contextInfo: getChannelContext()
                 });
 
                 await delay(1500);
-
                 const audioBuffer = await getAudioBuffer(BOT_AUDIO_URL);
                 if (audioBuffer) {
                     await currentSock.sendMessage(ownJid, {
@@ -3463,9 +2196,7 @@ Type *${currentPrefix}menu* to view commands.
                         contextInfo: getChannelContext()
                     });
                 }
-
             } catch (err) {
-                console.log(`[CONNECT MSG] ❌ Error:`, err.message);
                 connectMessageSent = false;
             }
         };
@@ -3474,31 +2205,19 @@ Type *${currentPrefix}menu* to view commands.
             const { connection, lastDisconnect } = update;
 
             if (connection === 'open') {
-                console.log(`✅ Bot connected: ${sanitizedNumber}`);
+                console.log(`✅ Connected: ${sanitizedNumber}`);
                 reconnectAttempts.set(sanitizedNumber, 0);
-
-                try {
-                    if (typeof ensureConfig === 'function') {
-                        await ensureConfig(sanitizedNumber);
-                    }
-                } catch (err) { }
-
+                try { if (typeof ensureConfig === 'function') await ensureConfig(sanitizedNumber); } catch (err) {}
                 socketCreationTime.set(sanitizedNumber, Date.now());
                 activeSockets.set(sanitizedNumber, sock);
-
-                setTimeout(() => {
-                    sendConnectMessage(sock, sanitizedNumber);
-                }, 3000);
+                setTimeout(() => sendConnectMessage(sock, sanitizedNumber), 3000);
 
                 if (res && typeof res.send === 'function' && !res.headersSent) {
                     return res.send({ status: "Connected", number: sanitizedNumber });
                 }
-
             } else if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                console.log(`⚠️ Connection closed: ${sanitizedNumber}, code: ${statusCode}`);
                 activeSockets.delete(sanitizedNumber);
-
                 if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                     await Session.deleteOne({ number: sanitizedNumber });
                     await fs.remove(path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`));
@@ -3523,14 +2242,10 @@ Type *${currentPrefix}menu* to view commands.
                 }, 5000);
                 return;
             }
-
             await delay(3000);
             try {
                 let code = await sock.requestPairingCode(sanitizedNumber);
-                if (res && typeof res.send === 'function' && !res.headersSent) {
-                    res.send({ code });
-                }
-                console.log(`✅ Pairing code sent: ${code}`);
+                if (res && typeof res.send === 'function' && !res.headersSent) res.send({ code });
             } catch (err) {
                 if (res && typeof res.status === 'function' && !res.headersSent) {
                     return res.status(500).send({ error: err.message });
@@ -3541,9 +2256,7 @@ Type *${currentPrefix}menu* to view commands.
                 return res.send({ status: "Already connected", number: sanitizedNumber });
             }
         }
-
     } catch (error) {
-        console.error("❌ StartBot error:", error.message);
         if (res && typeof res.status === 'function' && !res.headersSent) {
             return res.status(500).send({ error: error.message });
         }
@@ -3553,10 +2266,9 @@ Type *${currentPrefix}menu* to view commands.
 // ==========================================
 // API Endpoints
 // ==========================================
-
 router.post('/logout', async (req, res) => {
     const { number } = req.body || req.query;
-    if (!number) return res.status(400).send({ error: 'Phone number required!' });
+    if (!number) return res.status(400).send({ error: 'Phone required!' });
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
     try {
         if (activeSockets.has(sanitizedNumber)) {
@@ -3566,49 +2278,32 @@ router.post('/logout', async (req, res) => {
         }
         await Session.deleteOne({ number: sanitizedNumber });
         await fs.remove(path.join(SESSION_BASE_PATH, `session_${sanitizedNumber}`));
-        res.send({ status: "Logged out", number: sanitizedNumber });
-    } catch (e) {
-        res.status(500).send({ error: e.message });
-    }
+        res.send({ status: "Logged out" });
+    } catch (e) { res.status(500).send({ error: e.message }); }
 });
 
 router.get('/sessions', async (req, res) => {
     try {
         const allSessions = await Session.find({});
         const active = Array.from(activeSockets.keys());
-        res.send({
-            total: allSessions.length,
-            active: active,
-            sessions: allSessions.map(s => ({
-                number: s.number,
-                isActive: active.includes(s.number)
-            }))
-        });
-    } catch (e) {
-        res.status(500).send({ error: e.message });
-    }
+        res.send({ total: allSessions.length, active, sessions: allSessions.map(s => ({ number: s.number, isActive: active.includes(s.number) })) });
+    } catch (e) { res.status(500).send({ error: e.message }); }
 });
 
 router.post('/reconnect', async (req, res) => {
     const { number } = req.body || req.query;
-    if (!number) return res.status(400).send({ error: 'Phone number required!' });
+    if (!number) return res.status(400).send({ error: 'Phone required!' });
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
     try {
-        const session = await Session.findOne({ number: sanitizedNumber });
-        if (!session) return res.status(404).send({ error: 'No session found.' });
-        if (activeSockets.has(sanitizedNumber)) {
-            return res.send({ status: "Already connected" });
-        }
+        if (activeSockets.has(sanitizedNumber)) return res.send({ status: "Already connected" });
         await StartBot(sanitizedNumber, null, true);
         res.send({ status: "Reconnect initiated" });
-    } catch (e) {
-        res.status(500).send({ error: e.message });
-    }
+    } catch (e) { res.status(500).send({ error: e.message }); }
 });
 
 router.get('/', async (req, res) => {
     const { number } = req.query;
-    if (!number) return res.status(400).send({ error: 'Phone number required!' });
+    if (!number) return res.status(400).send({ error: 'Phone required!' });
     try {
         const sanitized = number.replace(/[^0-9]/g, '');
         const existingSession = await Session.findOne({ number: sanitized });
@@ -3625,12 +2320,7 @@ router.get('/', async (req, res) => {
 });
 
 (async () => {
-    try {
-        await delay(5000);
-        await restoreExistingSessions();
-    } catch (e) {
-        console.error("Restore error:", e.message);
-    }
+    try { await delay(5000); await restoreExistingSessions(); } catch (e) {}
 })();
 
 module.exports = router;
