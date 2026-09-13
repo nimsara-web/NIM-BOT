@@ -2,7 +2,7 @@
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
  * Mode: Full Features Enabled
- * Fixed: Sticker, Anti-Delete, GetContact Rate Limiting
+ * Fixed: Sticker (Phone Playable), TTS (Phone Playable), NIM API
  */
 const {
     default: makeWASocket,
@@ -35,6 +35,14 @@ try {
     console.log('⚠️ sharp not installed. Sticker will use raw buffer.');
 }
 
+// ffmpeg for audio conversion
+let ffmpeg;
+try {
+    ffmpeg = require('fluent-ffmpeg');
+} catch (e) {
+    console.log('⚠️ fluent-ffmpeg not installed. Using system ffmpeg.');
+}
+
 const Session = require('./Id');
 const { get, input, ensureConfig, handleSettingUpdate } = require('./configdb');
 
@@ -45,8 +53,8 @@ const BOT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r'
 const CHANNEL_JID = '120363362308230584@newsletter';
 const DEFAULT_OWNER_NUMBER = '94784280074';
 
-// 🔑 Zanta API Key
-const ZANTA_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
+// 🔑 NIM API Key
+const NIM_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
 
 const FOOTER = '\n\n> *Creator by Nimsara* 🧃🇱🇰';
 
@@ -64,7 +72,7 @@ const chatNodelete = new Map();
 // ==========================================
 // 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
 // ==========================================
-const getContactLocks = new Map(); // number -> { running: bool, sent: number, startTime }
+const getContactLocks = new Map();
 
 // ==========================================
 // 🔑 Get Owner Number from DB (per bot session)
@@ -101,7 +109,6 @@ function getMessageBody(msg) {
 function unwrapMessage(message) {
     if (!message) return null;
     
-    // Unwrap all nested containers
     while (
         message.ephemeralMessage ||
         message.viewOnceMessage ||
@@ -201,11 +208,11 @@ async function downloadYoutubeAudio(youtubeUrl) {
 }
 
 // ==========================================
-// 🔑 YouTube Video Download via Zanta API
+// 🔑 YouTube Video Download via NIM API
 // ==========================================
 async function downloadYoutubeVideo(youtubeUrl) {
     try {
-        const apiUrl = `https://api.zanta-mini.store/api/ytmp4-v2?apiKey=${ZANTA_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
+        const apiUrl = `https://api.zanta-mini.store/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
         const response = await axios.get(apiUrl, { timeout: 30000 });
         const videoUrl = response.data?.result?.url 
                       || response.data?.data?.url 
@@ -213,11 +220,11 @@ async function downloadYoutubeVideo(youtubeUrl) {
                       || response.data?.result?.download_url
                       || response.data?.downloadUrl;
         if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[YT VIDEO] ✅ Zanta API succeeded');
+            console.log('[YT VIDEO] ✅ NIM API succeeded');
             return videoUrl;
         }
     } catch (e) {
-        console.log('[YT VIDEO] Zanta API failed:', e.message);
+        console.log('[YT VIDEO] NIM API failed:', e.message);
     }
 
     try {
@@ -247,11 +254,11 @@ async function downloadYoutubeVideo(youtubeUrl) {
 }
 
 // ==========================================
-// 🔑 FIXED: TikTok Download via Zanta API
+// 🔑 TikTok Download via NIM API
 // ==========================================
 async function downloadTikTok(tiktokUrl) {
     try {
-        const apiUrl = `https://api.zanta-mini.store/api/tiktok?apiKey=${ZANTA_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
+        const apiUrl = `https://api.zanta-mini.store/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
         const response = await axios.get(apiUrl, { timeout: 30000 });
         const videoUrl = response.data?.result?.video 
                       || response.data?.result?.url
@@ -263,11 +270,11 @@ async function downloadTikTok(tiktokUrl) {
                       || response.data?.downloadUrl
                       || response.data?.result?.play;
         if (videoUrl && videoUrl.startsWith('http')) {
-            console.log('[TIKTOK] ✅ Zanta API succeeded');
+            console.log('[TIKTOK] ✅ NIM API succeeded');
             return videoUrl;
         }
     } catch (e) {
-        console.log('[TIKTOK] Zanta API failed:', e.message);
+        console.log('[TIKTOK] NIM API failed:', e.message);
     }
 
     try {
@@ -376,33 +383,117 @@ async function generateFakeChat(name, message) {
 }
 
 // ==========================================
-// 🔧 FIXED: Sticker Conversion with Sharp
+// 🔧 FIXED: Sticker Conversion - Phone Compatible
 // ==========================================
 async function convertToSticker(buffer, isVideo = false) {
     try {
-        if (sharp) {
-            // Use sharp for proper conversion
-            const sharpInstance = sharp(buffer, { animated: isVideo });
-            
-            if (isVideo) {
-                // For video/gif → animated webp
-                return await sharpInstance
-                    .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
-                    .webp({ quality: 80, effort: 3 })
-                    .toBuffer();
-            } else {
-                // For image → static webp
-                return await sharpInstance
-                    .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
-                    .webp({ quality: 85, effort: 3 })
-                    .toBuffer();
-            }
+        if (!sharp) {
+            console.log('⚠️ Sharp not available, returning raw buffer');
+            return buffer;
         }
-        // Fallback: return raw buffer (WhatsApp may auto-convert)
-        return buffer;
+
+        // Determine if it's animated (GIF/video)
+        const isAnimated = isVideo;
+
+        if (isAnimated) {
+            // For video/GIF → animated webp sticker
+            // Extract frames using sharp with animated: true
+            const animated = sharp(buffer, { 
+                animated: true,
+                limitInputPixels: false
+            });
+
+            const metadata = await animated.metadata();
+            
+            // Limit to reasonable frames for WhatsApp (max 100 frames)
+            const maxFrames = 100;
+            const pageHeight = metadata.pageHeight || metadata.height;
+            const totalFrames = metadata.pages || 1;
+            const framesToUse = Math.min(totalFrames, maxFrames);
+
+            return await sharp(buffer, {
+                animated: true,
+                limitInputPixels: false
+            })
+                .resize(512, 512, {
+                    fit: 'contain',
+                    background: { r: 0, g: 0, b: 0, alpha: 0 },
+                    withoutEnlargement: false
+                })
+                .webp({
+                    quality: 75,
+                    effort: 4,
+                    lossless: false,
+                    nearLossless: false,
+                    smartSubsample: true,
+                    loop: 0,
+                    delay: 100
+                })
+                .toBuffer();
+        } else {
+            // For static image → static webp sticker
+            return await sharp(buffer, {
+                limitInputPixels: false
+            })
+                .resize(512, 512, {
+                    fit: 'contain',
+                    background: { r: 0, g: 0, b: 0, alpha: 0 },
+                    withoutEnlargement: false
+                })
+                .webp({
+                    quality: 85,
+                    effort: 4,
+                    lossless: false
+                })
+                .toBuffer();
+        }
     } catch (e) {
         console.error('Sticker conversion error:', e.message);
         return buffer;
+    }
+}
+
+// ==========================================
+// 🔧 FIXED: TTS Audio Conversion - Phone Compatible
+// ==========================================
+async function convertTtsToOpus(mp3Buffer) {
+    try {
+        // Write temp mp3 file
+        const tmpDir = path.join(__dirname, 'tmp');
+        await fs.ensureDir(tmpDir);
+        
+        const tmpMp3 = path.join(tmpDir, `tts_${Date.now()}.mp3`);
+        const tmpOgg = path.join(tmpDir, `tts_${Date.now()}.ogg`);
+        
+        await fs.writeFile(tmpMp3, mp3Buffer);
+
+        // Convert to OGG Opus using ffmpeg (WhatsApp voice note format)
+        await new Promise((resolve, reject) => {
+            exec(
+                `ffmpeg -i "${tmpMp3}" -c:a libopus -b:a 48k -ar 48000 -ac 1 -vbr on -compression_level 10 -frame_duration 60 -application voip "${tmpOgg}" -y`,
+                { timeout: 30000 },
+                (error, stdout, stderr) => {
+                    if (error) {
+                        console.error('ffmpeg error:', stderr || error.message);
+                        reject(error);
+                    } else {
+                        resolve();
+                    }
+                }
+            );
+        });
+
+        // Read converted ogg
+        const oggBuffer = await fs.readFile(tmpOgg);
+
+        // Cleanup
+        await fs.remove(tmpMp3).catch(() => {});
+        await fs.remove(tmpOgg).catch(() => {});
+
+        return oggBuffer;
+    } catch (e) {
+        console.error('TTS conversion error:', e.message);
+        return null;
     }
 }
 
@@ -475,16 +566,14 @@ async function useMongoDBAuthState(number) {
 function setupCommandHandlers(socket, number) {
 
     // ==========================================
-    // 🔧 FIXED: Anti-Delete handler with better detection
+    // Anti-Delete handler
     // ==========================================
     socket.ev.on('messages.update', async (updates) => {
         try {
             for (const update of updates) {
                 const { key, update: updateData } = update;
                 
-                // Method 1: Check protocolMessage (delete/revoke)
                 const protocolMsg = updateData?.protocolMessage || updateData?.message?.protocolMessage;
-                
                 let revokedId = null;
                 
                 if (protocolMsg) {
@@ -493,20 +582,16 @@ function setupCommandHandlers(socket, number) {
                     }
                 }
                 
-                // Method 2: Check direct revoke key
                 if (!revokedId && updateData?.messageStubType === 1) {
-                    // REVOKE stub type
                     revokedId = key?.id;
                 }
                 
-                // Method 3: Check message === null (deleted)
                 if (!revokedId && updateData?.message === null && key?.id) {
                     revokedId = key.id;
                 }
                 
                 if (!revokedId) continue;
 
-                // Find cached message
                 let cachedMsg = messageCache.get(revokedId);
                 if (!cachedMsg) {
                     for (const [cacheKey, value] of messageCache) {
@@ -523,7 +608,6 @@ function setupCommandHandlers(socket, number) {
                 const senderJid = cachedMsg.key.participant || cachedMsg.key.remoteJid;
                 const messageText = getMessageBody(cachedMsg) || '[Media / Non-text message]';
 
-                // Store deleted message
                 deletedMessages.set(chatJid, {
                     sender: senderJid,
                     text: messageText,
@@ -535,7 +619,6 @@ function setupCommandHandlers(socket, number) {
 
                 console.log(`[ANTI-DELETE] ✅ Captured: ${senderJid} - ${messageText.substring(0, 50)}`);
 
-                // Check if NODELETE is ON for this chat
                 let nodeleteStatus = chatNodelete.get(chatJid);
                 if (nodeleteStatus === undefined || nodeleteStatus === null) {
                     try { 
@@ -587,7 +670,6 @@ ${messageText}
         const msg = messages[0];
         if (!msg) return;
 
-        // Cache message
         if (msg.key && msg.key.id) {
             messageCache.set(msg.key.id, msg);
             if (msg.key.stanzaId) messageCache.set(msg.key.stanzaId, msg);
@@ -721,7 +803,6 @@ ${messageText}
 
         const isMenuReply = isBotMenuMessage || hasMenuKeywords;
 
-        // Category selection
         if (!isCommand && body.match(/^[1-7]$/) && isMenuReply) {
             const categoryNum = parseInt(body);
             let categoryMenu = '';
@@ -857,7 +938,6 @@ ${messageText}
             return;
         }
 
-        // Back to main menu
         if (!isCommand && body === '0' && isMenuReply) {
             const botName = await get('BOT_NAME', number) || 'NIM BOT';
             const isFollowing = await checkChannelFollow(socket, msg.key.participant || sender);
@@ -1042,7 +1122,7 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // 🔑 .vvpowner - Set owner number for .vvp
+                // .vvpowner - Set owner number for .vvp
                 // ==========================================
                 case 'vvpowner':
                 case 'setvvpowner':
@@ -1085,7 +1165,7 @@ id - 842717887
                 }
 
                 // ==========================================
-                // 🔑 .pair - Generate pairing code from bot
+                // .pair
                 // ==========================================
                 case 'pair':
                 case 'paircode': {
@@ -1409,9 +1489,7 @@ id - 842717887
                     break;
                 }
 
-                // ==========================================
-                // 🔑 TIKTOK - UPDATED with Zanta API
-                // ==========================================
+                // TikTok
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
@@ -1615,7 +1693,7 @@ id - 842717887
                 }
 
                 // ==========================================
-                // 🔧 FIXED: STICKER COMMAND
+                // 🔧 FIXED: STICKER COMMAND - Phone Playable
                 // ==========================================
                 case 'sticker':
                 case 's': {
@@ -1625,7 +1703,6 @@ id - 842717887
                             return reply(`⚠️ Reply to image/video with .sticker` + FOOTER);
                         }
                         
-                        // Unwrap quoted message
                         let qMsg = quoted.quotedMessage;
                         qMsg = unwrapMessage(qMsg);
                         
@@ -1633,7 +1710,6 @@ id - 842717887
                             return reply(`⚠️ Could not read quoted message!` + FOOTER);
                         }
                         
-                        // Get media type
                         const mediaInfo = getMediaType(qMsg);
                         
                         if (!mediaInfo) {
@@ -1645,7 +1721,6 @@ id - 842717887
                         
                         await reply(`⏳ Creating sticker...` + FOOTER);
                         
-                        // Build proper download message
                         const downloadMsg = {
                             key: { 
                                 remoteJid: quoted.remoteJid || sender, 
@@ -1655,7 +1730,6 @@ id - 842717887
                             message: { [messageType]: mediaData }
                         };
                         
-                        // Download media buffer
                         const buffer = await downloadMediaMessage(
                             downloadMsg, 
                             'buffer', 
@@ -1667,12 +1741,17 @@ id - 842717887
                             return reply(`❌ Failed to download media!` + FOOTER);
                         }
                         
-                        // Convert to sticker
+                        // Convert to phone-compatible WebP sticker
                         const stickerBuffer = await convertToSticker(buffer, isVideo);
                         
-                        // Send sticker
+                        if (!stickerBuffer || stickerBuffer.length === 0) {
+                            return reply(`❌ Sticker conversion failed!` + FOOTER);
+                        }
+                        
+                        // Send with explicit WebP mimetype for phone compatibility
                         await socket.sendMessage(sender, {
-                            sticker: stickerBuffer
+                            sticker: stickerBuffer,
+                            mimetype: 'image/webp'
                         }, { quoted: msg });
                         
                         console.log(`[STICKER] ✅ Sent (${isVideo ? 'video' : 'image'}) - ${stickerBuffer.length} bytes`);
@@ -1894,14 +1973,13 @@ id - 842717887
                 }
 
                 // ==========================================
-                // 🔧 FIXED: GETCONTACT - Rate Limit Protection
+                // GETCONTACT - Rate Limit Protection
                 // ==========================================
                 case 'getcontact':
                 case 'gc': {
                     if (!msg.key.fromMe) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     if (!sender.endsWith('@g.us')) return reply(`⚠️ Group only!` + FOOTER);
                     
-                    // 🛡️ CHECK IF ALREADY RUNNING
                     const lockKey = number;
                     const existingLock = getContactLocks.get(lockKey);
                     if (existingLock?.running) {
@@ -1925,12 +2003,10 @@ id - 842717887
                             return reply(`❌ No members to message!` + FOOTER);
                         }
                         
-                        // 🛡️ LIMIT: Max 50 members per run (ban protection)
                         const MAX_SAFE = 50;
                         const targetMembers = members.slice(0, MAX_SAFE);
                         const skipped = members.length - targetMembers.length;
                         
-                        // 🛡️ Calculate safe time (min 10s per message)
                         const estTime = Math.ceil(targetMembers.length * 10 / 60);
                         
                         await reply(`📱 *STARTING GETCONTACT (SAFE MODE)*
@@ -1948,14 +2024,12 @@ ${skipped > 0 ? `⚠️ *Skipped (safe limit):* ${skipped}\n` : ''}⏱️ *Est. 
 
 ⚠️ *Do NOT run other bulk commands!*` + FOOTER);
                         
-                        // Set lock
                         getContactLocks.set(lockKey, {
                             running: true,
                             sent: 0,
                             startTime: Date.now()
                         });
                         
-                        // Safe message variations
                         const messages = [
                             'Hi 👋',
                             'Hello 👋',
@@ -1973,7 +2047,6 @@ ${skipped > 0 ? `⚠️ *Skipped (safe limit):* ${skipped}\n` : ''}⏱️ *Est. 
                             const memberJid = targetMembers[i];
                             if (memberJid === botJid) continue;
                             
-                            // Check if rate limited - stop early
                             if (rateLimited) {
                                 console.log(`[GETCONTACT] ⛔ Stopped early due to rate limit`);
                                 break;
@@ -1993,11 +2066,9 @@ ${skipped > 0 ? `⚠️ *Skipped (safe limit):* ${skipped}\n` : ''}⏱️ *Est. 
                                 
                                 console.log(`[GETCONTACT] ✅ ${sent}/${targetMembers.length} - ${memberJid}`);
                                 
-                                // 🛡️ SAFE DELAY: 10-15 seconds between messages
                                 const randomDelay = Math.floor(Math.random() * 5000) + 10000;
                                 await delay(randomDelay);
                                 
-                                // 🛡️ BREAK: 60s break every 5 messages
                                 if (sent % 5 === 0 && sent < targetMembers.length) {
                                     console.log(`[GETCONTACT] ☕ Taking 60s break after ${sent} messages`);
                                     await delay(60000);
@@ -2008,7 +2079,6 @@ ${skipped > 0 ? `⚠️ *Skipped (safe limit):* ${skipped}\n` : ''}⏱️ *Est. 
                                 const errMsg = (err.message || '').toLowerCase();
                                 console.log(`[GETCONTACT] ❌ Failed ${memberJid}: ${err.message}`);
                                 
-                                // 🛡️ RATE LIMIT DETECTION
                                 if (errMsg.includes('rate') || 
                                     errMsg.includes('limit') ||
                                     errMsg.includes('too many') ||
@@ -2020,12 +2090,10 @@ ${skipped > 0 ? `⚠️ *Skipped (safe limit):* ${skipped}\n` : ''}⏱️ *Est. 
                                     break;
                                 }
                                 
-                                // Longer delay on error
                                 await delay(15000);
                             }
                         }
                         
-                        // Clear lock
                         getContactLocks.delete(lockKey);
                         
                         const finalMsg = rateLimited 
@@ -2279,39 +2347,86 @@ ${skipped > 0 ? `⏭️ *Skipped:* ${skipped}\n` : ''}
                     break;
                 }
 
-                // TTS
+                // ==========================================
+                // 🔧 FIXED: TTS COMMAND - Phone Playable
+                // ==========================================
                 case 'tts':
                 case 'say': {
                     const text = args.join(' ');
                     if (!text) return reply(`⚠️ Usage: .tts [text]` + FOOTER);
                     
                     try {
-                        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
+                        await reply(`🎤 Generating voice... ⏳` + FOOTER);
                         
-                        const response = await axios.get(ttsUrl, { 
-                            responseType: 'arraybuffer', 
-                            timeout: 15000,
-                            headers: {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                'Referer': 'https://translate.google.com/'
+                        // Split text if too long (Google TTS limit ~200 chars)
+                        const maxLen = 180;
+                        const textChunks = [];
+                        if (text.length > maxLen) {
+                            const words = text.split(' ');
+                            let currentChunk = '';
+                            for (const word of words) {
+                                if ((currentChunk + ' ' + word).trim().length > maxLen) {
+                                    textChunks.push(currentChunk.trim());
+                                    currentChunk = word;
+                                } else {
+                                    currentChunk = (currentChunk + ' ' + word).trim();
+                                }
                             }
-                        });
-                        
-                        const audioBuffer = Buffer.from(response.data);
-                        
-                        if (audioBuffer.length < 100) {
-                            return reply(`❌ TTS failed! Try again.` + FOOTER);
+                            if (currentChunk) textChunks.push(currentChunk.trim());
+                        } else {
+                            textChunks.push(text);
                         }
                         
-                        await socket.sendMessage(sender, {
-                            audio: audioBuffer,
-                            mimetype: 'audio/mpeg',
-                            ptt: true,
-                            fileName: 'tts.mp3',
-                            contextInfo: channelInfo
-                        }, { quoted: msg });
+                        for (const chunk of textChunks) {
+                            const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunk)}&tl=en&client=tw-ob&total=${textChunks.length}&idx=${textChunks.indexOf(chunk)}&textlen=${chunk.length}`;
+                            
+                            const response = await axios.get(ttsUrl, { 
+                                responseType: 'arraybuffer', 
+                                timeout: 20000,
+                                headers: {
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                    'Referer': 'https://translate.google.com/',
+                                    'Accept': 'audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.5',
+                                    'Accept-Language': 'en-US,en;q=0.9'
+                                }
+                            });
+                            
+                            const mp3Buffer = Buffer.from(response.data);
+                            
+                            if (mp3Buffer.length < 500) {
+                                console.log('[TTS] Response too small, might be error');
+                                continue;
+                            }
+                            
+                            // 🔧 KEY FIX: Convert MP3 → OGG Opus (WhatsApp voice note format)
+                            const opusBuffer = await convertTtsToOpus(mp3Buffer);
+                            
+                            if (!opusBuffer || opusBuffer.length < 500) {
+                                console.log('[TTS] Opus conversion failed, sending MP3 instead');
+                                // Fallback: send MP3 as voice note
+                                await socket.sendMessage(sender, {
+                                    audio: mp3Buffer,
+                                    mimetype: 'audio/mpeg',
+                                    ptt: true,
+                                    contextInfo: channelInfo
+                                }, { quoted: msg });
+                            } else {
+                                // Send as proper WhatsApp voice note (OGG Opus)
+                                await socket.sendMessage(sender, {
+                                    audio: opusBuffer,
+                                    mimetype: 'audio/ogg; codecs=opus',
+                                    ptt: true,
+                                    contextInfo: channelInfo
+                                }, { quoted: msg });
+                                console.log(`[TTS] ✅ Sent voice note (${opusBuffer.length} bytes)`);
+                            }
+                            
+                            // Small delay between chunks
+                            if (textChunks.length > 1) await delay(1000);
+                        }
                         
                     } catch (e) {
+                        console.error('[TTS] Error:', e);
                         await reply(`❌ TTS failed: ${e.message}` + FOOTER);
                     }
                     break;
@@ -2731,7 +2846,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // VVP (Send to owner number from DB)
+                // VVP
                 case 'vvp':
                 case 'viewoncept': {
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
