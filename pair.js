@@ -54,7 +54,7 @@ const DEFAULT_OWNER_NUMBER = '94784280074';
 
 // 🔑 NIM API Key
 const NIM_API_KEY = 'zanta_xvIobqd2J59TznojfCgSevsX';
-const NIM_API_BASE = 'https://api.nim-api.store';
+const NIM_API_BASE = 'https://api.zanta-mini.store';
 
 // ==========================================
 // 🔑 OWNER SYSTEM - MAIN OWNERS (PROTECTED)
@@ -89,12 +89,12 @@ const autoSaveSettings = new Map();
 const getContactLocks = new Map();
 
 // ==========================================
-// 🛡️ AUTO-REPLY LOOP PREVENTION (NEW FIX)
+// 🛡️ AUTO-REPLY ANTI-LOOP SYSTEM
+// Tracks recent auto-replies to prevent bot-to-bot loops
 // ==========================================
-const autoReplyCooldown = new Map();       // sender -> lastReplyTime
-const autoReplyBotMsgCache = new Map();    // messageHash -> timestamp
-const AUTO_REPLY_COOLDOWN_MS = 8000;       // 8 seconds per sender
-const AUTO_REPLY_CACHE_TTL = 60000;        // 60 seconds cache
+const autoReplyTracker = new Map(); // key: `${number}_${sender}` → { count, firstTime }
+const AUTO_REPLY_WINDOW = 60000; // 60 seconds window
+const AUTO_REPLY_MAX_COUNT = 3; // Max 3 auto-replies per minute per sender
 
 // ==========================================
 // 🔑 STRICT Owner Check
@@ -132,6 +132,45 @@ async function loadOwnerList(botNumber) {
         console.log('⚠️ Could not load owner list, using defaults');
     }
 }
+
+// ==========================================
+// 🛡️ Auto-Reply Loop Detection
+// Returns TRUE if it's safe to auto-reply, FALSE if it's a potential loop
+// ==========================================
+function canAutoReply(botNumber, senderJid) {
+    const now = Date.now();
+    const key = `${botNumber}_${senderJid}`;
+    
+    let tracker = autoReplyTracker.get(key);
+    
+    // No tracker or window expired → create fresh
+    if (!tracker || (now - tracker.firstTime) > AUTO_REPLY_WINDOW) {
+        tracker = { count: 1, firstTime: now };
+        autoReplyTracker.set(key, tracker);
+        return true;
+    }
+    
+    // Within window → increment count
+    tracker.count++;
+    
+    // If exceeded max → block and log
+    if (tracker.count > AUTO_REPLY_MAX_COUNT) {
+        console.log(`[AUTO-REPLY] 🛑 Loop detected! Blocked reply to ${senderJid} (count: ${tracker.count})`);
+        return false;
+    }
+    
+    return true;
+}
+
+// Cleanup old tracker entries every 2 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, tracker] of autoReplyTracker) {
+        if (now - tracker.firstTime > AUTO_REPLY_WINDOW * 2) {
+            autoReplyTracker.delete(key);
+        }
+    }
+}, 120000);
 
 // ==========================================
 // 🔑 Get Owner Number from DB (per bot session)
@@ -247,114 +286,7 @@ async function sendWithTyping(sock, jid, message, options = {}) {
 }
 
 // ==========================================
-// 🛡️ AUTO-REPLY LOOP PREVENTION HELPERS (NEW)
-// ==========================================
-
-/**
- * Check if this message is a bot-generated response
- * (prevents loop between two bots replying to each other)
- */
-function isBotResponseMessage(text, botName) {
-    if (!text) return true;
-    const lower = text.toLowerCase().trim();
-    
-    // Empty or too short
-    if (lower.length === 0) return true;
-    
-    // Common bot signature patterns
-    const botPatterns = [
-        '© ᴄʀᴇᴀᴛᴏʀ ʙʏ ɴɪᴍꜱᴀʀᴀ',
-        '© creator by nimsara',
-        'nim bot',
-        'nimsara',
-        'r2k gaming channels',
-        'payment details',
-        'commercial bank',
-        'lolc bank',
-        'dialog finance',
-        'peoples bank',
-        'ez cash',
-        'binance',
-        'thankyou yaluwe',
-        'thankyou !',
-        'hi! 👋',
-        'mokuth na innwa',
-        'good morning🌝',
-        'good night✨',
-        'bye🍻',
-        'eyaa hadapu bot',
-        'නෙත්මින්ත',
-        'නිම්සර',
-        'bot creator',
-        'bot name',
-        'activers',
-        'channel :',
-        '🤖',
-        '🎵',
-        '📥',
-        '🎬',
-        '⚠️',
-        '❌',
-        '✅',
-        '⚙️',
-        '👀',
-        '🏓',
-        'ᴄʀᴇᴀᴛᴏʀ',
-        'ʙʏ ɴɪᴍꜱᴀʀᴀ'
-    ];
-    
-    // If message contains bot signatures
-    for (const pattern of botPatterns) {
-        if (lower.includes(pattern.toLowerCase())) return true;
-    }
-    
-    // If message starts with bot name mention
-    if (botName && lower.includes(botName.toLowerCase())) return true;
-    
-    return false;
-}
-
-/**
- * Check if the message sender is another bot
- * Detects forwarded messages, business accounts, and known bot patterns
- */
-function isFromAnotherBot(msg, body) {
-    if (!msg || !body) return false;
-    
-    // Check if message has bot-like context (forwarded newsletter)
-    const ctx = msg.message?.extendedTextMessage?.contextInfo;
-    if (ctx?.forwardedNewsletterMessageInfo) return true;
-    
-    // Check if the sender is a known bot number (from activeSockets)
-    const senderNum = (msg.key.participant || msg.key.remoteJid || '').split('@')[0].split(':')[0];
-    if (senderNum && activeSockets.has(senderNum)) return true;
-    
-    // Check for bot signatures in the message
-    if (isBotResponseMessage(body)) return true;
-    
-    return false;
-}
-
-/**
- * Cleanup old entries from auto-reply cache
- */
-function cleanupAutoReplyCache() {
-    const now = Date.now();
-    for (const [key, ts] of autoReplyBotMsgCache) {
-        if (now - ts > AUTO_REPLY_CACHE_TTL) {
-            autoReplyBotMsgCache.delete(key);
-        }
-    }
-    for (const [key, ts] of autoReplyCooldown) {
-        if (now - ts > AUTO_REPLY_COOLDOWN_MS * 3) {
-            autoReplyCooldown.delete(key);
-        }
-    }
-}
-
-// ==========================================
 // 🔧 FIXED: Phone-Compatible Sticker Conversion
-// (Fixed: proper WebP metadata, correct dimensions, alpha handling)
 // ==========================================
 async function convertToSticker(buffer, isVideo = false) {
     try {
@@ -363,14 +295,10 @@ async function convertToSticker(buffer, isVideo = false) {
             return buffer;
         }
 
-        // First, get metadata to understand the input
         const meta = await sharp(buffer, { animated: !!isVideo }).metadata();
         console.log(`[STICKER] Input: ${meta.width}x${meta.height}, format: ${meta.format}, animated: ${!!isVideo}`);
 
         if (isVideo) {
-            // ==========================================
-            // ANIMATED STICKER (Video/GIF → Animated WebP)
-            // ==========================================
             try {
                 const result = await sharp(buffer, {
                     animated: true,
@@ -391,7 +319,6 @@ async function convertToSticker(buffer, isVideo = false) {
                     })
                     .toBuffer();
                 
-                // Verify it's a valid WebP with RIFF header
                 if (result && result.length > 100 && 
                     result[0] === 0x52 && result[1] === 0x49 && 
                     result[2] === 0x46 && result[3] === 0x46) {
@@ -402,7 +329,6 @@ async function convertToSticker(buffer, isVideo = false) {
                 console.log('[STICKER] Animated failed, trying first frame:', animErr.message);
             }
 
-            // Fallback: extract first frame as static sticker
             try {
                 const result = await sharp(buffer, { 
                     animated: false, 
@@ -428,20 +354,17 @@ async function convertToSticker(buffer, isVideo = false) {
                 return buffer;
             }
         } else {
-            // ==========================================
-            // STATIC STICKER (Image → Static WebP)
-            // ==========================================
             const result = await sharp(buffer, {
                 limitInputPixels: false,
                 failOnError: false
             })
-                .rotate() // Auto-rotate based on EXIF
+                .rotate()
                 .resize(512, 512, {
                     fit: 'contain',
                     background: { r: 0, g: 0, b: 0, alpha: 0 },
                     withoutEnlargement: false
                 })
-                .ensureAlpha() // Force RGBA (required for WhatsApp stickers)
+                .ensureAlpha()
                 .webp({
                     quality: 80,
                     effort: 4,
@@ -450,7 +373,6 @@ async function convertToSticker(buffer, isVideo = false) {
                 })
                 .toBuffer();
             
-            // Verify RIFF/WEBP header
             if (result && result.length > 100 && 
                 result[0] === 0x52 && result[1] === 0x49 && 
                 result[2] === 0x46 && result[3] === 0x46) {
@@ -938,13 +860,8 @@ ${messageText}
 
         // ==========================================
         // 🔑 STRICT OWNER CHECK
-        // Only MAIN_OWNER_NUMBERS or added owners get owner privileges
-        // (NOT every bot user - even if msg.key.fromMe)
         // ==========================================
         const senderNumber = (msg.key.participant || sender).split('@')[0].split(':')[0];
-        // isOwnerUser = true ONLY if:
-        //   1. The message sender is in OWNER_LIST, OR
-        //   2. The message is from this bot session AND the bot's own number is an owner
         const isOwnerUser = isOwnerNumber(senderNumber) || 
                            (msg.key.fromMe && isOwnerNumber(number));
 
@@ -1347,7 +1264,7 @@ ${messageText}
         }
 
         // ==========================================
-        // 🛡️ AUTO-REPLY WITH LOOP PREVENTION (FIXED)
+        // 🔧 AUTO-REPLY (LOOP PROTECTED)
         // ==========================================
         global.autoReplyMode = global.autoReplyMode || 'off';
 
@@ -1359,78 +1276,61 @@ ${messageText}
                 (global.autoReplyMode === 'group' && isGroup);
 
             if (shouldAutoReply) {
-                try {
-                    cleanupAutoReplyCache();
-                    
-                    const textLower = body.toLowerCase().trim();
-                    const botName = await get('BOT_NAME', number) || 'NIM BOT';
-                    
-                    // 🛡️ FIX 1: Skip if message is from another bot
-                    if (isFromAnotherBot(msg, body)) {
-                        console.log(`[AUTOREPLY] ⏭️ Skipped (bot message detected)`);
-                        return;
-                    }
-                    
-                    // 🛡️ FIX 2: Skip if this exact message was already replied to recently
-                    const msgHash = `${sender}_${body.substring(0, 50)}`;
-                    if (autoReplyBotMsgCache.has(msgHash)) {
-                        console.log(`[AUTOREPLY] ⏭️ Skipped (duplicate within cache)`);
-                        return;
-                    }
-                    
-                    // 🛡️ FIX 3: Per-sender cooldown
-                    const lastReply = autoReplyCooldown.get(sender);
-                    if (lastReply && (Date.now() - lastReply) < AUTO_REPLY_COOLDOWN_MS) {
-                        console.log(`[AUTOREPLY] ⏭️ Skipped (cooldown active)`);
-                        return;
-                    }
-                    
-                    // 🛡️ FIX 4: Skip messages that contain bot signatures
-                    if (isBotResponseMessage(body, botName)) {
-                        console.log(`[AUTOREPLY] ⏭️ Skipped (bot signature detected)`);
-                        return;
-                    }
-                    
-                    // 🛡️ FIX 5: Skip very long messages (likely bot output)
-                    if (body.length > 500) {
-                        console.log(`[AUTOREPLY] ⏭️ Skipped (message too long)`);
-                        return;
-                    }
-                    
-                    // Mark this message as processed
-                    autoReplyBotMsgCache.set(msgHash, Date.now());
-                    autoReplyCooldown.set(sender, Date.now());
+                const textLower = body.toLowerCase().trim();
+                const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
+                
+                // ==========================================
+                // 🛡️ LOOP PROTECTION #1: Bot response pattern check
+                // ==========================================
+                const botResponsePatterns = [
+                    'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
+                    'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
+                    '🤖 *ai assistant*', '🎵 *song', '📥 *', '🎬 *', '⚠️ *', '❌ *',
+                    '✅ *', '⚙️ *', '👀', '🏓 *pong', '💾 *autosave',
+                    'view once', 'deleted message', 'nim bot', 'creator by nimsara'
+                ];
+                
+                const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
+                
+                if (isFromBot || isBotResponse) return;
 
-                    global.customReplies = global.customReplies || {};
-                    if (global.customReplies[textLower]) {
-                        await reply(global.customReplies[textLower] + FOOTER);
-                        return;
-                    }
+                // ==========================================
+                // 🛡️ LOOP PROTECTION #2: Rate limit per sender
+                // ==========================================
+                if (!canAutoReply(number, sender)) {
+                    return; // Blocked due to potential loop
+                }
 
-                    const words = textLower.split(/\s+/).filter(w => w.length > 0);
-                    const hasExactWord = (keyword) => words.includes(keyword);
-                    const isExactMessage = (phrase) => textLower === phrase;
+                global.customReplies = global.customReplies || {};
+                if (global.customReplies[textLower]) {
+                    await reply(global.customReplies[textLower] + FOOTER);
+                    return;
+                }
 
-                    if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || isExactMessage('හායි') || isExactMessage('hello')) {
-                        await reply('Hi! 👋' + FOOTER);
-                    } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නේ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
-                        await reply('Mokuth Na innwa😊' + FOOTER);
-                    } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මෝනින්')) {
-                        await reply('Good Morning🌝' + FOOTER);
-                    } else if (hasExactWord('gn') || isExactMessage('good night') || isExactMessage('ගුඩ් නයිට්')) {
-                        await reply('Good Night✨' + FOOTER);
-                    } else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || isExactMessage('good bye')) {
-                        await reply('Bye🍻' + FOOTER);
-                    } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
-                        await reply(`*🔦 R2K Gaming Channels 🔦*
+                const words = textLower.split(/\s+/).filter(w => w.length > 0);
+                const hasExactWord = (keyword) => words.includes(keyword);
+                const isExactMessage = (phrase) => textLower === phrase;
+
+                if (hasExactWord('hi') || hasExactWord('හායි') || hasExactWord('hello') || isExactMessage('හායි') || isExactMessage('hello')) {
+                    await reply('Hi! 👋' + FOOTER);
+                } else if (hasExactWord('mk') || isExactMessage('මොකද කරන්නේ') || isExactMessage('mokada karanne') || isExactMessage('mokada karanne?')) {
+                    await reply('Mokuth Na innwa😊' + FOOTER);
+                } else if (hasExactWord('gm') || isExactMessage('good morning') || isExactMessage('ගුඩ් මෝනින්')) {
+                    await reply('Good Morning🌝' + FOOTER);
+                } else if (hasExactWord('gn') || isExactMessage('good night') || isExactMessage('ගුඩ් නයිට්')) {
+                    await reply('Good Night✨' + FOOTER);
+                } else if (hasExactWord('bye') || hasExactWord('by') || hasExactWord('බායි') || isExactMessage('good bye')) {
+                    await reply('Bye🍻' + FOOTER);
+                } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
+                    await reply(`*🔦 R2K Gaming Channels 🔦*
 
 💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
 💓Youtube - https://www.youtube.com/@rush.2.kill__0
 💓Fb - https://www.facebook.com/profile.php?id=61581297341821
 
 *\`Thankyou Yaluwe !\`*` + FOOTER);
-                    } else if (textLower.includes('payment') || textLower.includes('bank details')) {
-                        await reply(`*💰Payment Details*
+                } else if (textLower.includes('payment') || textLower.includes('bank details')) {
+                    await reply(`*💰Payment Details*
 
 💡Bank - Commercial Bank
 Account number - 8029210301
@@ -1470,23 +1370,20 @@ id - 842717887
 
 
 *\`Thankyou !\`*` + FOOTER);
-                    } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
-                        try {
-                            const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
-                            const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
-                            const audioBuffer = Buffer.from(response.data);
-                            await reply({
-                                text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER,
-                                audio: audioBuffer,
-                                mimetype: 'audio/mp4',
-                                ptt: false
-                            });
-                        } catch (err) {
-                            await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER);
-                        }
+                } else if (textLower.includes('nethmintha') || textLower.includes('නෙත්මින්ත') || textLower.includes('nimsara')) {
+                    try {
+                        const audioUrl = 'https://github.com/nimsara-web/Im-Nim/raw/refs/heads/main/Data/welcomto%20nim%20bot.MP3';
+                        const response = await axios.get(audioUrl, { responseType: 'arraybuffer' });
+                        const audioBuffer = Buffer.from(response.data);
+                        await reply({
+                            text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER,
+                            audio: audioBuffer,
+                            mimetype: 'audio/mp4',
+                            ptt: false
+                        });
+                    } catch (err) {
+                        await reply('Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER);
                     }
-                } catch (e) {
-                    console.error('[AUTOREPLY] Error:', e.message);
                 }
             }
         }
@@ -1515,7 +1412,6 @@ id - 842717887
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    // 🔒 STRICT: Only MAIN owners can manage owner list
                     const senderClean = (msg.key.participant || sender).split('@')[0].split(':')[0];
                     const isMainOwner = isMainOwnerNumber(senderClean) || 
                                        (msg.key.fromMe && isMainOwnerNumber(number));
@@ -1578,7 +1474,6 @@ id - 842717887
                             return reply(`⚠️ Usage: .nimcmd remove [number]` + FOOTER);
                         }
                         
-                        // 🔒 Protect MAIN owner numbers
                         if (MAIN_OWNER_NUMBERS.includes(remNum)) {
                             return reply(`⚠️ *Cannot remove main owner!*
 
@@ -2122,7 +2017,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔧 TIKTOK - With Quality Selection
+                // 🔧 TIKTOK
                 // ==========================================
                 case 'tt':
                 case 'tiktok': {
@@ -2153,7 +2048,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔧 YOUTUBE - With Quality Selection
+                // 🔧 YOUTUBE
                 // ==========================================
                 case 'yt':
                 case 'youtube': {
@@ -2439,16 +2334,12 @@ Main owners:
                             return reply(`❌ Failed to download media!` + FOOTER);
                         }
                         
-                        // 🔧 Convert to phone-compatible WebP sticker
                         const stickerBuffer = await convertToSticker(buffer, isVideo);
                         
                         if (!stickerBuffer || stickerBuffer.length === 0) {
                             return reply(`❌ Sticker conversion failed!` + FOOTER);
                         }
                         
-                        // 🔧 FIX: Send as sticker with explicit mimetype
-                        // For static: image/webp
-                        // For animated: still image/webp (WhatsApp detects animation from WebP frames)
                         await socket.sendMessage(sender, {
                             sticker: stickerBuffer
                         }, { quoted: msg });
@@ -3751,10 +3642,10 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
                     const validOptions = ['all', 'inbox', 'group', 'off'];
                     if (!validOptions.includes(option)) {
-                        return reply(`🤖 *Auto-Reply*\n\nCurrent: *${(global.autoReplyMode || 'off').toUpperCase()}*\n\nOptions:\n• .autoreply all\n• .autoreply inbox\n• .autoreply group\n• .autoreply off` + FOOTER);
+                        return reply(`🤖 *Auto-Reply*\n\nCurrent: *${(global.autoReplyMode || 'off').toUpperCase()}*\n\nOptions:\n• .autoreply all\n• .autoreply inbox\n• .autoreply group\n• .autoreply off\n\n🛡️ *Loop Protection: ENABLED*` + FOOTER);
                     }
                     global.autoReplyMode = option;
-                    await reply(`✅ Auto-Reply: *${global.autoReplyMode.toUpperCase()}*` + FOOTER);
+                    await reply(`✅ Auto-Reply: *${global.autoReplyMode.toUpperCase()}*\n\n🛡️ Loop protection active!` + FOOTER);
                     break;
                 }
 
@@ -4178,7 +4069,6 @@ Type *${currentPrefix}menu* to view commands.
                 console.log(`✅ Bot connected: ${sanitizedNumber}`);
                 reconnectAttempts.set(sanitizedNumber, 0);
 
-                // 🔑 Load owner list for this bot session
                 await loadOwnerList(sanitizedNumber);
 
                 try {
