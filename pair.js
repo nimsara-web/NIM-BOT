@@ -94,7 +94,7 @@ async function getAudioBuffer(url) {
 }
 
 // ==========================================
-// 🔥 Channel Forward Context Info (for all messages)
+// 🔥 Channel Forward Context Info
 // ==========================================
 function getChannelContext() {
     return {
@@ -148,16 +148,15 @@ async function downloadYoutubeAudio(youtubeUrl) {
 }
 
 // ==========================================
-// 🔥 FIXED: YouTube Video Download via Zanta API
+// 🔥 YouTube Video Download via Zanta API
 // ==========================================
 async function downloadYoutubeVideo(youtubeUrl) {
-    // Try 1: Zanta Mini API (NEW)
+    // Try 1: Zanta Mini API
     try {
         const apiUrl = `https://api.zanta-mini.store/api/ytmp4-v2?apiKey=${ZANTA_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
         
         const response = await axios.get(apiUrl, { timeout: 30000 });
         
-        // Try multiple response formats
         const videoUrl = response.data?.result?.url 
                       || response.data?.data?.url 
                       || response.data?.url 
@@ -172,7 +171,7 @@ async function downloadYoutubeVideo(youtubeUrl) {
         console.log('[YT VIDEO] Zanta API failed:', e.message);
     }
 
-    // Try 2: yt-dlp (fallback)
+    // Try 2: yt-dlp
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url -f "best[ext=mp4]/best" "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
@@ -184,7 +183,7 @@ async function downloadYoutubeVideo(youtubeUrl) {
         console.log('[YT VIDEO] yt-dlp failed');
     }
 
-    // Try 3: ytdl-core (last fallback)
+    // Try 3: ytdl-core
     try {
         const ytdl = require('@distube/ytdl-core');
         const info = await ytdl.getInfo(youtubeUrl);
@@ -200,18 +199,58 @@ async function downloadYoutubeVideo(youtubeUrl) {
     return null;
 }
 
+// ==========================================
+// 🔥 FIXED: TikTok Download via Zanta API
+// ==========================================
 async function downloadTikTok(tiktokUrl) {
+    // Try 1: Zanta Mini API (NEW)
+    try {
+        const apiUrl = `https://api.zanta-mini.store/api/tiktok?apiKey=${ZANTA_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
+        
+        const response = await axios.get(apiUrl, { timeout: 30000 });
+        
+        // Try multiple response formats
+        const videoUrl = response.data?.result?.video 
+                      || response.data?.result?.url
+                      || response.data?.data?.video 
+                      || response.data?.data?.url 
+                      || response.data?.video 
+                      || response.data?.url 
+                      || response.data?.result?.download_url
+                      || response.data?.downloadUrl
+                      || response.data?.result?.play;
+        
+        if (videoUrl && videoUrl.startsWith('http')) {
+            console.log('[TIKTOK] ✅ Zanta API succeeded');
+            return videoUrl;
+        }
+    } catch (e) {
+        console.log('[TIKTOK] Zanta API failed:', e.message);
+    }
+
+    // Try 2: yt-dlp (fallback)
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url "${tiktokUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) return url;
-    } catch (e) {}
+        if (url && url.startsWith('http')) {
+            console.log('[TIKTOK] ✅ yt-dlp succeeded');
+            return url;
+        }
+    } catch (e) {
+        console.log('[TIKTOK] yt-dlp failed');
+    }
 
+    // Try 3: siputzx API (last fallback)
     try {
         const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 20000 });
         const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url;
-        if (url) return url;
-    } catch (e) {}
+        if (url) {
+            console.log('[TIKTOK] ✅ siputzx API succeeded');
+            return url;
+        }
+    } catch (e) {
+        console.log('[TIKTOK] siputzx API failed');
+    }
 
     return null;
 }
@@ -1257,7 +1296,9 @@ id - 842717887
                     break;
                 }
 
-                // TikTok
+                // ==========================================
+                // 🔥 TIKTOK - UPDATED with Zanta API
+                // ==========================================
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
@@ -1286,9 +1327,7 @@ id - 842717887
                     break;
                 }
 
-                // ==========================================
-                // 🔥 YOUTUBE - UPDATED with Zanta API
-                // ==========================================
+                // YouTube
                 case 'yt':
                 case 'youtube': {
                     const url = args[0];
