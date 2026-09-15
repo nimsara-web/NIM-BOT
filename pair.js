@@ -53,8 +53,8 @@ const CHANNEL_JID = '120363362308230584@newsletter';
 const DEFAULT_OWNER_NUMBER = '94784280074';
 
 // 🔑 NIM API Key
-const NIM_API_KEY = 'zan_natXAWcy_tf3usx5pgy';
-const NIM_API_BASE = 'https://api.zanta-mini.store';
+const NIM_API_KEY = 'zan_natXAWcy_8hpi5yn4b6';
+const NIM_API_BASE = 'zan_natXAWcy_8hpi5yn4b6';
 
 // ==========================================
 // 🔑 OWNER SYSTEM - MAIN OWNERS (PROTECTED)
