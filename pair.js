@@ -54,7 +54,7 @@ const DEFAULT_OWNER_NUMBER = '94784280074';
 
 // 🔑 NIM API Key
 const NIM_API_KEY = 'zan_natXAWcy_8hpi5yn4b6';
-const NIM_API_BASE = 'zan_natXAWcy_8hpi5yn4b6';
+const NIM_API_BASE = 'https://api.zanta-mini.store';
 
 // ==========================================
 // 🔑 OWNER SYSTEM - MAIN OWNERS (PROTECTED)
@@ -1456,7 +1456,7 @@ id - 842717887
                         await reply({
                             text: 'Ow kiyanna Nimsara tikakin rp karai man eya hadapu Bot! 👨‍💻💗😎' + FOOTER,
                             audio: audioBuffer,
-                            mimetype: 'audio/mp4',
+                            mimetype: 'audio/mp3',
                             ptt: false
                         });
                     } catch (err) {
