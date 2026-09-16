@@ -77,11 +77,11 @@ const messageCache = new Map();
 const deletedMessages = new Map();
 const reconnectAttempts = new Map();
 const userCategoryState = new Map();
-const menuMessageIds = new Map(); // 🔑 Stores ONLY this bot's menu message IDs
+const menuMessageIds = new Map();
 const groupAntiLink = new Map();
 const groupWelcome = new Map();
 
-// 🔑 FIXED: Per-session nodelete state (botNumber -> Map of chatId -> status)
+// 🔑 Per-session nodelete state (botNumber -> Map of chatId -> status)
 const chatNodelete = new Map();
 
 // 🔑 Quality selection pending state
@@ -90,26 +90,23 @@ const pendingQualitySelection = new Map();
 // 🔑 AutoSave settings
 const autoSaveSettings = new Map();
 
-// 🔑 FIXED: Per-session AutoReply settings (botNumber -> Map of senderJid -> mode)
+// 🔑 Per-session AutoReply settings
 const autoReplySettings = new Map();
 
-// 🔑 FIXED: Per-session Custom Replies (botNumber -> Map of trigger -> response)
+// 🔑 Per-session Custom Replies
 const customReplies = new Map();
 
 // 🔑 Movie selection pending
 const movieSelection = new Map();
 
-// 🔑 VVP Silent Recipients (per-session)
-const vvpRecipients = new Map();
-
 // 🔑 VVP Recipient Settings (per-session) - stores 1 or 2 emojis
 const vvpEmojis = new Map();
 
+// 🔑 Status Reaction Settings (per-session) - stores emoji for status forward
+const statusReactionEmojis = new Map();
+
 // 🔑 Anti-spam settings (per-session -> Map of chatId -> status)
 const antiSpamSettings = new Map();
-
-// 🔑 Status Save Settings
-const statusSaveSettings = new Map();
 
 // ==========================================
 // 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
@@ -136,6 +133,71 @@ function isMainOwnerNumber(number) {
     if (!number) return false;
     const clean = number.replace(/[^0-9]/g, '');
     return MAIN_OWNER_NUMBERS.includes(clean);
+}
+
+// ==========================================
+// 🛡️ Bot Message Detection (prevent auto-reply to bots)
+// ==========================================
+function isBotMessage(msg) {
+    if (!msg) return false;
+    
+    // Check if message is from a bot (has bot indicators)
+    const text = (msg.message?.conversation || 
+                  msg.message?.extendedTextMessage?.text || 
+                  msg.message?.imageMessage?.caption || 
+                  msg.message?.videoMessage?.caption || '').toLowerCase();
+    
+    // Bot response patterns
+    const botPatterns = [
+        '© ᴄʀᴇᴀᴛᴏʀ ʙY',
+        '© creator by',
+        '> © ᴄʀᴇᴀᴛᴏʀ',
+        '*╭─`',
+        '*╰──────',
+        'ᴍᴀɪɴ ᴍᴇɴᴜ',
+        'menu categories',
+        'reply to this message with a number',
+        'download commands',
+        'settings commands',
+        'owner commands',
+        'utility commands',
+        'group admin',
+        'fun commands',
+        'ai assistant',
+        '🤖 *ai',
+        '🏓 *pong',
+        '💾 *autosave',
+        '✅ *anti',
+        '❌ *', '⚠️ *', '✅ *', '⚙️ *', '📥 *', '🎬 *',
+        'deleted message detected',
+        'view once received',
+        'your status saved',
+        'spam detected',
+        'link detected',
+        'pair code generated',
+        'bot connected',
+        'nim bot',
+        'zanta-mini.store',
+        'nimsara-official',
+        'whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r'
+    ];
+    
+    // Check text patterns
+    for (const pattern of botPatterns) {
+        if (text.includes(pattern.toLowerCase())) return true;
+    }
+    
+    // Check if message has forwarded newsletter context (bot indicator)
+    const contextInfo = msg.message?.extendedTextMessage?.contextInfo || 
+                        msg.message?.imageMessage?.contextInfo || 
+                        msg.message?.videoMessage?.contextInfo;
+    
+    if (contextInfo?.forwardedNewsletterMessageInfo) {
+        const jid = contextInfo.forwardedNewsletterMessageInfo.newsletterJid || '';
+        if (jid && jid.includes('newsletter')) return true;
+    }
+    
+    return false;
 }
 
 // ==========================================
@@ -206,9 +268,7 @@ async function loadAutoReplySettings(botNumber) {
                 state.customReplies = {};
             }
         }
-    } catch (e) {
-        // Keep defaults
-    }
+    } catch (e) {}
 }
 
 async function saveAutoReplySettings(botNumber) {
@@ -220,7 +280,7 @@ async function saveAutoReplySettings(botNumber) {
 }
 
 // ==========================================
-// 🔑 Anti-Spam Helpers (per-session, per-chat)
+// 🔑 Anti-Spam Helpers
 // ==========================================
 function getAntiSpamState(botNumber) {
     if (!antiSpamSettings.has(botNumber)) {
@@ -263,34 +323,18 @@ async function setAntiSpamStatus(botNumber, chatJid, status) {
 }
 
 // ==========================================
-// 🔑 VVP Silent Recipient Helpers
+// 🔑 VVP Silent Helpers (2 emojis trigger)
 // ==========================================
-function getVvpRecipients(botNumber) {
-    if (!vvpRecipients.has(botNumber)) {
-        vvpRecipients.set(botNumber, []);
-    }
-    return vvpRecipients.get(botNumber);
-}
-
 function getVvpEmojis(botNumber) {
     if (!vvpEmojis.has(botNumber)) {
-        vvpEmojis.set(botNumber, '❤️');
+        vvpEmojis.set(botNumber, '❤️,🔥');
     }
     return vvpEmojis.get(botNumber);
 }
 
 async function loadVvpSettings(botNumber) {
     try {
-        const recipients = await get('VVP_RECIPIENTS', botNumber);
         const emojis = await get('VVP_EMOJIS', botNumber);
-        
-        if (recipients) {
-            try {
-                const parsed = JSON.parse(recipients);
-                if (Array.isArray(parsed)) vvpRecipients.set(botNumber, parsed);
-            } catch (e) {}
-        }
-        
         if (emojis) {
             vvpEmojis.set(botNumber, emojis);
         }
@@ -299,24 +343,40 @@ async function loadVvpSettings(botNumber) {
 
 async function saveVvpSettings(botNumber) {
     try {
-        await handleSettingUpdate('VVP_RECIPIENTS', JSON.stringify(getVvpRecipients(botNumber)), () => {}, botNumber);
         await handleSettingUpdate('VVP_EMOJIS', getVvpEmojis(botNumber), () => {}, botNumber);
     } catch (e) {}
 }
 
 // ==========================================
-// 🔑 Status Save Helpers
+// 🔑 Status Reaction Helpers (.statusr)
 // ==========================================
-function getStatusSaveState(botNumber) {
-    return statusSaveSettings.get(botNumber) || 'off';
+function getStatusReactionEmoji(botNumber) {
+    if (!statusReactionEmojis.has(botNumber)) {
+        statusReactionEmojis.set(botNumber, '');
+    }
+    return statusReactionEmojis.get(botNumber);
+}
+
+async function loadStatusReactionSettings(botNumber) {
+    try {
+        const emoji = await get('STATUS_REACTION_EMOJI', botNumber);
+        if (emoji) {
+            statusReactionEmojis.set(botNumber, emoji);
+        }
+    } catch (e) {}
+}
+
+async function saveStatusReactionSettings(botNumber) {
+    try {
+        await handleSettingUpdate('STATUS_REACTION_EMOJI', getStatusReactionEmoji(botNumber), () => {}, botNumber);
+    } catch (e) {}
 }
 
 // ==========================================
-// 🔑 GLOBAL Owner List Loader (from MAIN session)
+// 🔑 GLOBAL Owner List Loader
 // ==========================================
 async function loadGlobalOwnerList() {
     try {
-        // Try to load from first available session
         const allSessions = await Session.find({});
         for (const session of allSessions) {
             try {
@@ -341,7 +401,6 @@ async function loadGlobalOwnerList() {
     }
 }
 
-// 🔑 Save owner list GLOBALLY to ALL sessions
 async function saveGlobalOwnerList() {
     try {
         const allSessions = await Session.find({});
@@ -391,7 +450,7 @@ setInterval(() => {
 }, 120000);
 
 // ==========================================
-// 🔑 Get Owner Number from DB (per bot session)
+// 🔑 Get Owner Number from DB
 // ==========================================
 async function getOwnerNumber(botNumber) {
     try {
@@ -504,7 +563,7 @@ async function sendWithTyping(sock, jid, message, options = {}) {
 }
 
 // ==========================================
-// 🔧 FIXED: Sticker Conversion - WhatsApp Compatible
+// 🔧 Sticker Conversion
 // ==========================================
 async function convertToSticker(buffer, isVideo = false) {
     try {
@@ -608,7 +667,7 @@ async function convertToSticker(buffer, isVideo = false) {
 }
 
 // ==========================================
-// 🔧 TTS Audio Conversion - Phone Compatible
+// 🔧 TTS Audio Conversion
 // ==========================================
 async function convertTtsToOpus(mp3Buffer) {
     try {
@@ -648,10 +707,8 @@ async function convertTtsToOpus(mp3Buffer) {
 }
 
 // ==========================================
-// 🔧 FIXED: DOWNLOAD HELPERS - Better error handling
+// 🔧 Download Helpers
 // ==========================================
-
-// 🔑 Helper: Download URL to buffer with retry
 async function downloadUrlToBuffer(url, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
@@ -690,7 +747,7 @@ async function downloadYoutubeAudio(youtubeUrl) {
             console.log('[YT AUDIO] ✅ NIM API succeeded');
             const buffer = await downloadUrlToBuffer(audioUrl);
             if (buffer) return buffer;
-            return { url: audioUrl }; // fallback to URL
+            return { url: audioUrl };
         }
     } catch (e) {
         console.log('[YT AUDIO] NIM API failed:', e.message);
@@ -998,7 +1055,7 @@ async function useMongoDBAuthState(number) {
 function setupCommandHandlers(socket, number) {
 
     // ==========================================
-    // 🔑 AUTO VVP TRIGGER via EMOJI REACTION (Silent)
+    // 🔑 VVP SILENT + STATUS REACTION via EMOJI REACTION
     // ==========================================
     socket.ev.on('messages.reaction', async (reactions) => {
         try {
@@ -1007,7 +1064,100 @@ function setupCommandHandlers(socket, number) {
                 if (!reactionData?.text) continue;
                 
                 const emoji = reactionData.text;
-                const myEmojis = getVvpEmojis(number).split(',').map(e => e.trim());
+                
+                // 🔑 Check if this is a STATUS reaction
+                if (key.remoteJid === 'status@broadcast') {
+                    const statusEmoji = getStatusReactionEmoji(number);
+                    
+                    if (statusEmoji && emoji === statusEmoji) {
+                        // Check if this status is from this bot's own number
+                        const statusSender = (key.participant || '').split('@')[0];
+                        
+                        if (statusSender === number) {
+                            console.log(`[STATUS-REACTION] ${emoji} reacted to own status, forwarding silently...`);
+                            
+                            let targetMsg = messageCache.get(key.id);
+                            
+                            if (!targetMsg) {
+                                // Try to find in cache by stanzaId
+                                for (const [cacheKey, value] of messageCache) {
+                                    if (value?.key?.id === key.id) {
+                                        targetMsg = value;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if (!targetMsg || !targetMsg.message) {
+                                console.log(`[STATUS-REACTION] Status message not found in cache`);
+                                continue;
+                            }
+                            
+                            try {
+                                const msgContent = unwrapMessage(targetMsg.message);
+                                const mediaInfo = getMediaType(msgContent);
+                                
+                                const ownJid = `${number}@s.whatsapp.net`;
+                                
+                                if (mediaInfo) {
+                                    const { type: messageType, data: mediaData } = mediaInfo;
+                                    
+                                    const buffer = await downloadMediaMessage(
+                                        {
+                                            key: { 
+                                                remoteJid: 'status@broadcast', 
+                                                id: key.id, 
+                                                participant: key.participant 
+                                            },
+                                            message: targetMsg.message
+                                        },
+                                        'buffer',
+                                        {},
+                                        { logger: pino({ level: 'silent' }) }
+                                    );
+                                    
+                                    const caption = `📸 *Your Status Saved*\n\n🕐 ${new Date().toLocaleString()}`;
+                                    
+                                    if (messageType === 'imageMessage') {
+                                        await socket.sendMessage(ownJid, {
+                                            image: buffer,
+                                            caption: caption
+                                        });
+                                    } else if (messageType === 'videoMessage') {
+                                        await socket.sendMessage(ownJid, {
+                                            video: buffer,
+                                            caption: caption
+                                        });
+                                    } else if (messageType === 'audioMessage') {
+                                        await socket.sendMessage(ownJid, {
+                                            audio: buffer,
+                                            mimetype: mediaData?.mimetype || 'audio/mpeg'
+                                        });
+                                    }
+                                    
+                                    console.log(`[STATUS-REACTION] ✅ Status media saved silently`);
+                                } else {
+                                    // Text status
+                                    let statusText = targetMsg.message?.conversation || 
+                                                    targetMsg.message?.extendedTextMessage?.text || '';
+                                    
+                                    if (statusText) {
+                                        await socket.sendMessage(ownJid, {
+                                            text: `📸 *Your Status Saved*\n\n💬 ${statusText}\n\n🕐 ${new Date().toLocaleString()}`
+                                        });
+                                        console.log(`[STATUS-REACTION] ✅ Text status saved silently`);
+                                    }
+                                }
+                            } catch (e) {
+                                console.log(`[STATUS-REACTION] Error: ${e.message}`);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                
+                // 🔑 Check if this is a VVP (ViewOnce) reaction
+                const myEmojis = getVvpEmojis(number).split(',').map(e => e.trim()).filter(e => e.length > 0);
                 
                 if (!myEmojis.includes(emoji)) continue;
                 
@@ -1022,7 +1172,6 @@ function setupCommandHandlers(socket, number) {
                 const mediaInfo = getMediaType(msgContent);
                 if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) continue;
                 
-                // Check if it's a view-once message
                 const originalMsg = targetMsg.message;
                 const isViewOnce = originalMsg?.viewOnceMessage || 
                                    originalMsg?.viewOnceMessageV2 || 
@@ -1052,39 +1201,26 @@ function setupCommandHandlers(socket, number) {
                         { logger: pino({ level: 'silent' }) }
                     );
                     
-                    // 🔑 Send to configured VVP recipients SILENTLY
-                    const recipients = getVvpRecipients(number);
-                    const ownNumber = number;
-                    
-                    // Build recipient list - include own number + configured recipients
-                    const allRecipients = [...new Set([ownNumber, ...recipients])];
-                    
+                    // 🔑 Send ONLY to own number SILENTLY
+                    const ownJid = `${number}@s.whatsapp.net`;
                     const senderName = (key.participant || key.remoteJid).split('@')[0];
                     const caption = `📥 *View Once Received*\n\n👤 From: @${senderName}\n🕐 ${new Date().toLocaleString()}`;
                     
-                    for (const recipient of allRecipients) {
-                        const recipientJid = `${recipient.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
-                        
-                        try {
-                            if (messageType === 'imageMessage') {
-                                await socket.sendMessage(recipientJid, {
-                                    image: buffer,
-                                    caption: caption,
-                                    mentions: [key.participant || key.remoteJid]
-                                });
-                            } else if (messageType === 'videoMessage') {
-                                await socket.sendMessage(recipientJid, {
-                                    video: buffer,
-                                    caption: caption,
-                                    mentions: [key.participant || key.remoteJid]
-                                });
-                            }
-                        } catch (e) {
-                            console.log(`[VVP-EMOJI] Failed to send to ${recipient}: ${e.message}`);
-                        }
+                    if (messageType === 'imageMessage') {
+                        await socket.sendMessage(ownJid, {
+                            image: buffer,
+                            caption: caption,
+                            mentions: [key.participant || key.remoteJid]
+                        });
+                    } else if (messageType === 'videoMessage') {
+                        await socket.sendMessage(ownJid, {
+                            video: buffer,
+                            caption: caption,
+                            mentions: [key.participant || key.remoteJid]
+                        });
                     }
                     
-                    console.log(`[VVP-EMOJI] ✅ Forwarded silently to ${allRecipients.length} recipients`);
+                    console.log(`[VVP-EMOJI] ✅ Forwarded silently to own number`);
                     
                 } catch (e) {
                     console.log(`[VVP-EMOJI] Error: ${e.message}`);
@@ -1096,7 +1232,7 @@ function setupCommandHandlers(socket, number) {
     });
 
     // ==========================================
-    // Anti-Delete handler - FIXED: per-session
+    // Anti-Delete handler
     // ==========================================
     socket.ev.on('messages.update', async (updates) => {
         try {
@@ -1280,7 +1416,6 @@ ${messageText}
                 const antiSpamStatus = await getAntiSpamStatus(number, sender);
                 
                 if (antiSpamStatus === 'on') {
-                    // Simple spam detection: check for repeated messages
                     const spamKey = `${number}_${sender}_${senderNumber}`;
                     const now = Date.now();
                     
@@ -1312,7 +1447,6 @@ ${messageText}
                                 contextInfo: channelInfo
                             });
                         } else {
-                            // Try to kick if group
                             if (sender.endsWith('@g.us')) {
                                 try {
                                     await socket.groupParticipantsUpdate(sender, [msg.key.participant], 'remove');
@@ -1467,12 +1601,11 @@ ${messageText}
         }
 
         // ==========================================
-        // 🔑 MENU REPLY HANDLER - FIXED: ONLY own bot's menu
+        // 🔑 MENU REPLY HANDLER - ONLY own bot's menu
         // ==========================================
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
         const quotedStanzaId = contextInfo?.stanzaId || '';
         
-        // 🔑 FIXED: ONLY check if this is OUR menu message
         const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
 
         if (!isCommand && body.match(/^[1-7]$/) && isBotMenuMessage) {
@@ -1510,7 +1643,8 @@ ${messageText}
 *┃ 👋 .welcome [on/off]*
 *┃ 🗑️ .nodelet [on/off]*
 *┃ 💾 .autosave [on/off]*
-*┃ 🛡️ .antispam [on/off] - NEW*
+*┃ 🛡️ .antispam [on/off]*
+*┃ 📸 .statusr [emoji] - Status Save*
 *┃ 🔤 .setprefix [prefix]*
 *╰──────────────────────*
 
@@ -1523,9 +1657,8 @@ ${messageText}
 *┃ 📋 .settings*
 *┃ 📊 .active*
 *┃ 🔗 .pair [number]*
-*┃ 📞 .vvpr [emoji] - Set VVP emoji*
-*┃ 📞 .vvpadd [number] - Add VVP recipient*
-*┃ 📞 .vvplist - List VVP recipients*
+*┃ 📞 .vvpr [emoji1,emoji2] - VVP emojis*
+*┃ 📸 .statusr [emoji] - Status Save emoji*
 *┃ 🔤 .setprefix [prefix]*
 *┃ 💾 .setreply [trigger] [response]*
 *┃ 💾 .delreply [trigger]*
@@ -1584,7 +1717,7 @@ ${messageText}
 *┃ 📊 .ginfo / .groupinfo*
 *┃ 📊 .poll [Q|opt1|opt2]*
 *┃ 📞 .getcontact*
-*┃ 🛡️ .antispam [on/off] - NEW*
+*┃ 🛡️ .antispam [on/off]*
 *╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -1672,7 +1805,7 @@ ${messageText}
         }
 
         // ==========================================
-        // 🔧 AUTO-REPLY - FIXED: Per-session
+        // 🔧 AUTO-REPLY - Per-session + BOT FILTER
         // ==========================================
         const autoReplyState = getAutoReplyState(number);
         const autoReplyMode = autoReplyState.mode;
@@ -1688,17 +1821,10 @@ ${messageText}
                 const textLower = body.toLowerCase().trim();
                 const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
                 
-                const botResponsePatterns = [
-                    'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
-                    'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
-                    '🤖 *ai assistant*', '🎵 *song', '📥 *', '🎬 *', '⚠️ *', '❌ *',
-                    '✅ *', '⚙️ *', '👀', '🏓 *pong', '💾 *autosave',
-                    'view once', 'deleted message', 'nim bot', 'creator by nimsara'
-                ];
-                
-                const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
-                
-                if (isFromBot || isBotResponse) return;
+                // 🛡️ FIXED: Skip if message is from another bot
+                if (isFromBot || isBotMessage(msg)) {
+                    return;
+                }
 
                 if (!canAutoReply(number, sender)) {
                     return;
@@ -1814,10 +1940,11 @@ id - 842717887
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    if (!isMainOwner) {
+                    // 🔑 FIXED: Check if sender is in GLOBAL owner list (gives access in ANY session)
+                    if (!isOwnerNumber(senderNumber) && !isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only MAIN bot owners can use this command!
+💡 Only bot owners can use this command!
 
 🔒 *Main Owners:*
 • +94784280074
@@ -1843,7 +1970,18 @@ id - 842717887
                         return reply(ownerListText + FOOTER);
                     }
                     
+                    // 🔑 ADD/REMOVE only allowed by MAIN owners
                     if (action === 'add' || action === 'addowner') {
+                        if (!isMainOwner) {
+                            return reply(`⚠️ *Access Denied!*
+
+💡 Only MAIN owners can add new owners!
+
+🔒 *Main Owners:*
+• +94784280074
+• +94701726411` + FOOTER);
+                        }
+                        
                         const newNum = args[1]?.replace(/[^0-9]/g, '');
                         if (!newNum || newNum.length < 9) {
                             return reply(`⚠️ Usage: .nimcmd add [number]\nExample: .nimcmd add 94771234567` + FOOTER);
@@ -1863,8 +2001,14 @@ id - 842717887
 
 🌐 *Applied to ALL sessions!*
 
-💡 This number can now use owner commands!` + FOOTER);
+💡 This number can now use owner commands in ANY session!` + FOOTER);
                     } else if (action === 'remove' || action === 'delowner') {
+                        if (!isMainOwner) {
+                            return reply(`⚠️ *Access Denied!*
+
+💡 Only MAIN owners can remove owners!` + FOOTER);
+                        }
+                        
                         const remNum = args[1]?.replace(/[^0-9]/g, '');
                         if (!remNum) {
                             return reply(`⚠️ Usage: .nimcmd remove [number]` + FOOTER);
@@ -1904,6 +2048,9 @@ Main owners:
                         listText += `\n🌐 = Global across all sessions`;
                         await reply(listText + FOOTER);
                     } else if (action === 'reset') {
+                        if (!isMainOwner) {
+                            return reply(`⚠️ *Access Denied!* Only MAIN owners can reset!` + FOOTER);
+                        }
                         GLOBAL_OWNER_LIST = [...MAIN_OWNER_NUMBERS];
                         await saveGlobalOwnerList();
                         await reply(`✅ Owner list reset to default (main owners only)!
@@ -1992,7 +2139,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .reset - FIXED: Reset name & logo to original
+                // 🔑 .reset - Reset name & logo
                 // ==========================================
                 case 'reset':
                 case 'resetbot': {
@@ -2009,7 +2156,6 @@ Main owners:
                     const resetType = args[0]?.toLowerCase();
                     
                     if (!resetType || resetType === 'all') {
-                        // Reset both name and logo
                         await handleSettingUpdate("BOT_NAME", ORIGINAL_BOT_NAME, () => {}, number);
                         await handleSettingUpdate("BOT_LOGO", ORIGINAL_BOT_LOGO, () => {}, number);
                         
@@ -2044,7 +2190,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .vvpr - Set VVP emoji trigger
+                // 🔑 .vvpr - Set VVP emoji triggers (2 emojis)
                 // ==========================================
                 case 'vvpr':
                 case 'setvvp': {
@@ -2054,20 +2200,19 @@ Main owners:
                     
                     if (!emojiInput) {
                         const currentEmojis = getVvpEmojis(number);
-                        const recipients = getVvpRecipients(number);
                         return reply(`📞 *VVP EMOJI SETTINGS*
 
 📊 *Current Emoji(s):* ${currentEmojis}
-👥 *Recipients:* ${recipients.length}
 
 *Usage:*
-• .vvpr ❤️ - Single emoji
 • .vvpr ❤️,🔥 - Two emojis
+• .vvpr ❤️ - Single emoji
 
-💡 React to any ViewOnce message with these emoji(s) to silently forward it to your own number + all added recipients!` + FOOTER);
+💡 React with either emoji on any ViewOnce message → silently forwarded to your own number!
+
+🔒 *Silent:* No reply, no reaction, no notification.` + FOOTER);
                     }
                     
-                    // Validate emoji(s) - max 2
                     const emojiList = emojiInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
                     
                     if (emojiList.length === 0) {
@@ -2086,108 +2231,57 @@ Main owners:
 
 📊 *New Emoji(s):* ${emojiString}
 
-💡 React with ${emojiList.map(e => `"${e}"`).join(' or ')} on any ViewOnce message to silently forward it!
+💡 React with ${emojiList.map(e => `"${e}"`).join(' or ')} on any ViewOnce message → silently forwarded to your own number!
 
 🔒 *Silent Mode:* No reaction, no reply, no notification to sender.` + FOOTER);
                     break;
                 }
 
                 // ==========================================
-                // 🔑 .vvpadd - Add recipient for VVP
+                // 🔑 .statusr - Set status reaction emoji
                 // ==========================================
-                case 'vvpadd':
-                case 'addvvp': {
+                case 'statusr':
+                case 'setstatusr': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
-                    const newRecipient = args[0]?.replace(/[^0-9]/g, '');
+                    const emojiInput = args.join(' ').trim();
                     
-                    if (!newRecipient || newRecipient.length < 9) {
-                        return reply(`⚠️ Usage: .vvpadd [number]\nExample: .vvpadd 94771234567` + FOOTER);
+                    if (!emojiInput) {
+                        const currentEmoji = getStatusReactionEmoji(number);
+                        return reply(`📸 *STATUS REACTION SETTINGS*
+
+📊 *Current Emoji:* ${currentEmoji || '_Not set_'}
+
+*Usage:* \`.statusr ❤️\`
+
+💡 React with this emoji on your OWN status → status media saved silently to your own number!
+
+🔒 *Silent:* No reply, no notification.` + FOOTER);
                     }
                     
-                    const recipients = getVvpRecipients(number);
+                    // Take only first emoji
+                    const emojiList = emojiInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
+                    const emoji = emojiList[0];
                     
-                    if (recipients.includes(newRecipient)) {
-                        return reply(`⚠️ Number already in VVP list!` + FOOTER);
+                    if (!emoji) {
+                        return reply(`⚠️ Please provide an emoji!` + FOOTER);
                     }
                     
-                    recipients.push(newRecipient);
-                    await saveVvpSettings(number);
+                    statusReactionEmojis.set(number, emoji);
+                    await saveStatusReactionSettings(number);
                     
-                    await reply(`✅ *VVP Recipient Added!*
+                    await reply(`✅ *STATUS REACTION SET!*
 
-📱 *Number:* +${newRecipient}
-👥 *Total Recipients:* ${recipients.length}
+📊 *Emoji:* ${emoji}
 
-💡 ViewOnce media will now be forwarded to this number too!` + FOOTER);
+💡 React with "${emoji}" on your OWN status → status saved silently to your number!
+
+🔒 *Silent Mode:* No reply, no notification.` + FOOTER);
                     break;
                 }
 
                 // ==========================================
-                // 🔑 .vvprem - Remove recipient
-                // ==========================================
-                case 'vvprem':
-                case 'remvvp': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const remRecipient = args[0]?.replace(/[^0-9]/g, '');
-                    
-                    if (!remRecipient) {
-                        return reply(`⚠️ Usage: .vvprem [number]` + FOOTER);
-                    }
-                    
-                    const recipients = getVvpRecipients(number);
-                    const idx = recipients.indexOf(remRecipient);
-                    
-                    if (idx === -1) {
-                        return reply(`⚠️ Number not in VVP list!` + FOOTER);
-                    }
-                    
-                    recipients.splice(idx, 1);
-                    await saveVvpSettings(number);
-                    
-                    await reply(`✅ *VVP Recipient Removed!*
-
-📱 *Number:* +${remRecipient}
-👥 *Total Recipients:* ${recipients.length}` + FOOTER);
-                    break;
-                }
-
-                // ==========================================
-                // 🔑 .vvplist - List VVP recipients
-                // ==========================================
-                case 'vvplist':
-                case 'listvvp': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const recipients = getVvpRecipients(number);
-                    const currentEmojis = getVvpEmojis(number);
-                    
-                    let listText = `📞 *VVP SETTINGS*\n\n`;
-                    listText += `📊 *Emoji(s):* ${currentEmojis}\n`;
-                    listText += `👥 *Recipients:* ${recipients.length}\n\n`;
-                    listText += `📱 *Your Number (auto):* +${number}\n`;
-                    
-                    if (recipients.length > 0) {
-                        listText += `\n*Additional Recipients:*\n`;
-                        recipients.forEach((num, i) => {
-                            listText += `${i+1}. +${num}\n`;
-                        });
-                    } else {
-                        listText += `\n_No additional recipients_\n`;
-                    }
-                    
-                    listText += `\n*Commands:*\n`;
-                    listText += `• .vvpr [emoji] - Set trigger emoji(s)\n`;
-                    listText += `• .vvpadd [number] - Add recipient\n`;
-                    listText += `• .vvprem [number] - Remove recipient\n`;
-                    
-                    await reply(listText + FOOTER);
-                    break;
-                }
-
-                // ==========================================
-                // 🔑 .antispam - FIXED: Inbox + Group support
+                // 🔑 .antispam - Inbox + Group support
                 // ==========================================
                 case 'antispam': {
                     const val = args[0]?.toLowerCase();
@@ -2244,39 +2338,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .statussave - Save status to own number
-                // ==========================================
-                case 'statussave':
-                case 'savestatus': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const val = args[0]?.toLowerCase();
-                    
-                    if (!val || !['on', 'off'].includes(val)) {
-                        const current = getStatusSaveState(number);
-                        return reply(`📸 *STATUS SAVE SETTINGS*
-
-📊 *Current:* ${current === 'on' ? '✅ ON' : '❌ OFF'}
-
-*Usage:*
-• \`.statussave on\` - Forward status to own number
-• \`.statussave off\` - Disable
-
-💡 When ON, any status you post will be saved to your own number (auto-forward) so you can keep it!` + FOOTER);
-                    }
-                    
-                    statusSaveSettings.set(number, val);
-                    
-                    await reply(`✅ *STATUS SAVE ${val === 'on' ? 'ENABLED' : 'DISABLED'}*
-
-📊 *Status:* ${val === 'on' ? '✅ ON' : '❌ OFF'}
-
-💡 ${val === 'on' ? 'Your statuses will be saved to your own number!' : 'Status save disabled.'}` + FOOTER);
-                    break;
-                }
-
-                // ==========================================
-                // 🔑 .autosave - Regular Owner
+                // 🔑 .autosave
                 // ==========================================
                 case 'autosave': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -2331,46 +2393,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .vvpowner - Regular Owner (deprecated)
-                // ==========================================
-                case 'vvpowner':
-                case 'setvvpowner':
-                case 'setowner': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const newOwnerNumber = args[0]?.replace(/[^0-9]/g, '');
-                    
-                    if (!newOwnerNumber) {
-                        const currentOwner = await getOwnerNumber(number);
-                        return reply(`📞 *VVP OWNER SETTINGS*
-
-📊 *Current Owner:* +${currentOwner}
-
-*Usage:* \`.vvpowner [number]\`
-*Example:* \`.vvpowner 94784280074\`
-
-💡 This number will receive all ViewOnce media!
-
-⚠️ *Note:* Use \`.vvpadd\` for the new silent VVP system!` + FOOTER);
-                    }
-                    
-                    if (newOwnerNumber.length < 9 || newOwnerNumber.length > 15) {
-                        return reply(`❌ *Invalid number!*
-
-📝 Format: 94784280074
-📏 Length: 9-15 digits` + FOOTER);
-                    }
-                    
-                    try {
-                        await handleSettingUpdate("OWNER_NUMBER", newOwnerNumber, reply, number);
-                    } catch (e) {
-                        await reply(`❌ Failed to save: ${e.message}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // ==========================================
-                // .pair - Regular Owner
+                // .pair
                 // ==========================================
                 case 'pair':
                 case 'paircode': {
@@ -2452,7 +2475,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .active - Regular Owner
+                // .active
                 // ==========================================
                 case 'active':
                 case 'activeusers': {
@@ -2493,7 +2516,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .nodelet - Per-session, per-chat
+                // .nodelet
                 // ==========================================
                 case 'nodelet':
                 case 'nodelete': {
@@ -2588,7 +2611,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 📤 .forward - Forward message to JID
+                // .forward
                 // ==========================================
                 case 'forward':
                 case 'fwd': {
@@ -2785,9 +2808,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // 🔧 SONG - FIXED
-                // ==========================================
+                // SONG
                 case 'song': {
                     const query = args.join(' ');
                     if (!query) return reply(`⚠️ Please provide a song name!` + FOOTER);
@@ -2829,9 +2850,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // 🔧 TIKTOK - FIXED
-                // ==========================================
+                // TIKTOK
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
@@ -2861,9 +2880,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // 🔧 YOUTUBE - FIXED
-                // ==========================================
+                // YOUTUBE
                 case 'yt':
                 case 'youtube': {
                     const url = args[0];
@@ -2918,9 +2935,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // 🔧 FACEBOOK - FIXED
-                // ==========================================
+                // FACEBOOK
                 case 'fb':
                 case 'facebook': {
                     const url = args[0];
@@ -2948,9 +2963,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // 🔧 INSTAGRAM - FIXED
-                // ==========================================
+                // INSTAGRAM
                 case 'ig':
                 case 'instagram': {
                     const url = args[0];
@@ -2991,9 +3004,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // 🔧 MOVIE DOWNLOAD
-                // ==========================================
+                // MOVIE
                 case 'movie':
                 case 'film': {
                     const query = args.join(' ');
@@ -3101,9 +3112,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // 🔧 STICKER COMMAND
-                // ==========================================
+                // STICKER
                 case 'sticker':
                 case 's': {
                     try {
@@ -3403,9 +3412,7 @@ Main owners:
                     break;
                 }
 
-                // ==========================================
-                // GETCONTACT - Rate Limit Protection
-                // ==========================================
+                // GETCONTACT
                 case 'getcontact':
                 case 'gc': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -3971,9 +3978,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .setreply
-                // ==========================================
                 case 'setreply': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
@@ -4389,9 +4394,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .mode
-                // ==========================================
                 case 'mode': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
@@ -4412,9 +4415,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .autoread
-                // ==========================================
                 case 'autoread': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
@@ -4427,9 +4428,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .autoreply
-                // ==========================================
                 case 'autoreply': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
@@ -4478,6 +4477,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 • .autoreply list - View all replies
 
 🛡️ *Loop Protection: ENABLED*
+🤖 *Bot Filter: ENABLED*
 🔒 *Per-Session: YES*` + FOOTER);
                     }
                     
@@ -4487,6 +4487,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     await reply(`✅ Auto-Reply: *${state.mode.toUpperCase()}*
 
 🔒 This setting applies ONLY to bot +${number}
+🤖 Bot messages will be ignored
 
 💡 Use \`.autoreply list\` to see custom replies` + FOOTER);
                     break;
@@ -4584,9 +4585,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .setprefix
-                // ==========================================
                 case 'setprefix': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const newPrefix = args[0];
@@ -4605,8 +4604,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const autoSaveName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
                     const autoReplyState = getAutoReplyState(number);
                     const vvpEmoji = getVvpEmojis(number);
-                    const vvpRecipientCount = getVvpRecipients(number).length;
-                    const statusSave = getStatusSaveState(number);
+                    const statusREmoji = getStatusReactionEmoji(number);
 
                     await reply(`⚙️ *${bName} SETTINGS*
 
@@ -4621,8 +4619,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 > Auto Reply: *${autoReplyState.mode.toUpperCase()}*
 > Custom Replies: *${Object.keys(autoReplyState.customReplies).length}*
 > VVP Emoji: *${vvpEmoji}*
-> VVP Recipients: *${vvpRecipientCount}*
-> Status Save: *${statusSave}*
+> Status Save Emoji: *${statusREmoji || 'Not set'}*
 
 🛠️ *Commands:*
 • ${pfx}autoview [on/off]
@@ -4630,15 +4627,13 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 • ${pfx}alwaysonline [on/off]
 • ${pfx}autosave [on/off]
 • ${pfx}autoreply [mode]
-• ${pfx}vvpr [emoji]
-• ${pfx}statussave [on/off]
+• ${pfx}vvpr [emoji1,emoji2]
+• ${pfx}statusr [emoji]
 • ${pfx}setprefix [prefix]` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .autoview
-                // ==========================================
                 case 'autoview': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -4650,9 +4645,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .autolike
-                // ==========================================
                 case 'autolike': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -4664,9 +4657,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // ==========================================
                 // .alwaysonline
-                // ==========================================
                 case 'alwaysonline': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -4731,85 +4722,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
             }
         } catch (e) {
             console.log("Group welcome error:", e.message);
-        }
-    });
-
-    // ==========================================
-    // 🔑 STATUS SAVE - Save status to own number
-    // ==========================================
-    socket.ev.on('messages.upsert', async ({ messages }) => {
-        for (const msg of messages) {
-            if (!msg.message) continue;
-            
-            if (msg.key && msg.key.remoteJid === 'status@broadcast') {
-                const statusSave = getStatusSaveState(number);
-                
-                if (statusSave === 'on') {
-                    const senderNumber = (msg.key.participant || '').split('@')[0];
-                    
-                    if (senderNumber === number) {
-                        try {
-                            const mediaInfo = getMediaType(msg.message);
-                            
-                            if (mediaInfo) {
-                                const { type: messageType, data: mediaData } = mediaInfo;
-                                
-                                const downloadMsg = {
-                                    key: { 
-                                        remoteJid: msg.key.remoteJid, 
-                                        id: msg.key.id, 
-                                        participant: msg.key.participant 
-                                    },
-                                    message: msg.message
-                                };
-                                
-                                const buffer = await downloadMediaMessage(
-                                    downloadMsg, 
-                                    'buffer', 
-                                    {}, 
-                                    { logger: pino({ level: 'silent' }) }
-                                );
-                                
-                                const ownJid = `${number}@s.whatsapp.net`;
-                                const caption = `📸 *Your Status Saved*\n\n🕐 ${new Date().toLocaleString()}`;
-                                
-                                if (messageType === 'imageMessage') {
-                                    await socket.sendMessage(ownJid, {
-                                        image: buffer,
-                                        caption: caption
-                                    });
-                                } else if (messageType === 'videoMessage') {
-                                    await socket.sendMessage(ownJid, {
-                                        video: buffer,
-                                        caption: caption
-                                    });
-                                } else if (messageType === 'audioMessage') {
-                                    await socket.sendMessage(ownJid, {
-                                        audio: buffer,
-                                        mimetype: mediaData?.mimetype || 'audio/mpeg'
-                                    });
-                                }
-                                
-                                console.log(`[STATUS-SAVE] ✅ Saved status to own number`);
-                            } else {
-                                // Text status
-                                let statusText = msg.message?.conversation || 
-                                                msg.message?.extendedTextMessage?.text || '';
-                                
-                                if (statusText) {
-                                    const ownJid = `${number}@s.whatsapp.net`;
-                                    await socket.sendMessage(ownJid, {
-                                        text: `📸 *Your Status Saved*\n\n💬 ${statusText}\n\n🕐 ${new Date().toLocaleString()}`
-                                    });
-                                    console.log(`[STATUS-SAVE] ✅ Saved text status`);
-                                }
-                            }
-                        } catch (e) {
-                            console.log(`[STATUS-SAVE] Error: ${e.message}`);
-                        }
-                    }
-                }
-            }
         }
     });
 }
@@ -4897,7 +4809,6 @@ async function restoreExistingSessions() {
     try {
         console.log("🔍 Checking for existing sessions...");
         
-        // 🔑 Load global owner list BEFORE starting sessions
         await loadGlobalOwnerList();
         
         const allSessions = await Session.find({});
@@ -5019,16 +4930,13 @@ Type *${currentPrefix}menu* to view commands.
                 console.log(`✅ Bot connected: ${sanitizedNumber}`);
                 reconnectAttempts.set(sanitizedNumber, 0);
 
-                // 🔑 Load GLOBAL owner list (once)
                 if (!GLOBAL_OWNER_LIST_LOADED) {
                     await loadGlobalOwnerList();
                 }
                 
-                // 🔑 Load per-session auto-reply settings
                 await loadAutoReplySettings(sanitizedNumber);
-                
-                // 🔑 Load VVP settings
                 await loadVvpSettings(sanitizedNumber);
+                await loadStatusReactionSettings(sanitizedNumber);
 
                 try {
                     if (typeof ensureConfig === 'function') {
