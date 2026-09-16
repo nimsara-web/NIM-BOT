@@ -61,13 +61,8 @@ const NIM_API_BASE = 'https://api.zanta-mini.store';
 // ==========================================
 const MAIN_OWNER_NUMBERS = ['94784280074', '94701726411'];
 
-// 🔑 Original bot name & logo for reset
-const ORIGINAL_BOT_NAME = 'NIM BOT';
-const ORIGINAL_BOT_LOGO = BOT_IMAGE_URL;
-
-// 🔑 GLOBAL Owner list (shared across ALL sessions)
-let GLOBAL_OWNER_LIST = [...MAIN_OWNER_NUMBERS];
-let GLOBAL_OWNER_LIST_LOADED = false;
+// 🔑 Dynamic owner list (starts with main owners, can add more via .nimcmd)
+let OWNER_LIST = [...MAIN_OWNER_NUMBERS];
 
 const FOOTER = '\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻';
 
@@ -81,7 +76,7 @@ const menuMessageIds = new Map();
 const groupAntiLink = new Map();
 const groupWelcome = new Map();
 
-// 🔑 Per-session nodelete state (botNumber -> Map of chatId -> status)
+// 🔑 FIXED: Per-session nodelete state (botNumber -> Map of chatId -> status)
 const chatNodelete = new Map();
 
 // 🔑 Quality selection pending state
@@ -90,23 +85,14 @@ const pendingQualitySelection = new Map();
 // 🔑 AutoSave settings
 const autoSaveSettings = new Map();
 
-// 🔑 Per-session AutoReply settings
+// 🔑 FIXED: Per-session AutoReply settings (botNumber -> Map of senderJid -> mode)
 const autoReplySettings = new Map();
 
-// 🔑 Per-session Custom Replies
+// 🔑 FIXED: Per-session Custom Replies (botNumber -> Map of trigger -> response)
 const customReplies = new Map();
 
 // 🔑 Movie selection pending
 const movieSelection = new Map();
-
-// 🔑 VVP Recipient Settings (per-session) - stores 1 or 2 emojis
-const vvpEmojis = new Map();
-
-// 🔑 Status Reaction Settings (per-session) - stores emoji for status forward
-const statusReactionEmojis = new Map();
-
-// 🔑 Anti-spam settings (per-session -> Map of chatId -> status)
-const antiSpamSettings = new Map();
 
 // ==========================================
 // 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
@@ -121,83 +107,18 @@ const AUTO_REPLY_WINDOW = 60000;
 const AUTO_REPLY_MAX_COUNT = 3;
 
 // ==========================================
-// 🔑 STRICT Owner Check - GLOBAL
+// 🔑 STRICT Owner Check
 // ==========================================
 function isOwnerNumber(number) {
     if (!number) return false;
     const clean = number.replace(/[^0-9]/g, '');
-    return GLOBAL_OWNER_LIST.includes(clean);
+    return OWNER_LIST.includes(clean);
 }
 
 function isMainOwnerNumber(number) {
     if (!number) return false;
     const clean = number.replace(/[^0-9]/g, '');
     return MAIN_OWNER_NUMBERS.includes(clean);
-}
-
-// ==========================================
-// 🛡️ Bot Message Detection (prevent auto-reply to bots)
-// ==========================================
-function isBotMessage(msg) {
-    if (!msg) return false;
-    
-    // Check if message is from a bot (has bot indicators)
-    const text = (msg.message?.conversation || 
-                  msg.message?.extendedTextMessage?.text || 
-                  msg.message?.imageMessage?.caption || 
-                  msg.message?.videoMessage?.caption || '').toLowerCase();
-    
-    // Bot response patterns
-    const botPatterns = [
-        '© ᴄʀᴇᴀᴛᴏʀ ʙY',
-        '© creator by',
-        '> © ᴄʀᴇᴀᴛᴏʀ',
-        '*╭─`',
-        '*╰──────',
-        'ᴍᴀɪɴ ᴍᴇɴᴜ',
-        'menu categories',
-        'reply to this message with a number',
-        'download commands',
-        'settings commands',
-        'owner commands',
-        'utility commands',
-        'group admin',
-        'fun commands',
-        'ai assistant',
-        '🤖 *ai',
-        '🏓 *pong',
-        '💾 *autosave',
-        '✅ *anti',
-        '❌ *', '⚠️ *', '✅ *', '⚙️ *', '📥 *', '🎬 *',
-        'deleted message detected',
-        'view once received',
-        'your status saved',
-        'spam detected',
-        'link detected',
-        'pair code generated',
-        'bot connected',
-        'nim bot',
-        'zanta-mini.store',
-        'nimsara-official',
-        'whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r'
-    ];
-    
-    // Check text patterns
-    for (const pattern of botPatterns) {
-        if (text.includes(pattern.toLowerCase())) return true;
-    }
-    
-    // Check if message has forwarded newsletter context (bot indicator)
-    const contextInfo = msg.message?.extendedTextMessage?.contextInfo || 
-                        msg.message?.imageMessage?.contextInfo || 
-                        msg.message?.videoMessage?.contextInfo;
-    
-    if (contextInfo?.forwardedNewsletterMessageInfo) {
-        const jid = contextInfo.forwardedNewsletterMessageInfo.newsletterJid || '';
-        if (jid && jid.includes('newsletter')) return true;
-    }
-    
-    return false;
 }
 
 // ==========================================
@@ -268,7 +189,9 @@ async function loadAutoReplySettings(botNumber) {
                 state.customReplies = {};
             }
         }
-    } catch (e) {}
+    } catch (e) {
+        // Keep defaults
+    }
 }
 
 async function saveAutoReplySettings(botNumber) {
@@ -280,138 +203,24 @@ async function saveAutoReplySettings(botNumber) {
 }
 
 // ==========================================
-// 🔑 Anti-Spam Helpers
+// 🔑 Load Owner List from DB
 // ==========================================
-function getAntiSpamState(botNumber) {
-    if (!antiSpamSettings.has(botNumber)) {
-        antiSpamSettings.set(botNumber, new Map());
-    }
-    return antiSpamSettings.get(botNumber);
-}
-
-async function getAntiSpamStatus(botNumber, chatJid) {
-    const state = getAntiSpamState(botNumber);
-    let status = state.get(chatJid);
-    
-    if (status === undefined || status === null) {
-        let dbVal = null;
-        try { dbVal = await get(`ANTISPAM_${chatJid}`, botNumber); } catch (e) {}
-        if (!dbVal) {
-            try { 
-                const cleanKey = chatJid.replace(/[^0-9]/g, '');
-                dbVal = await get(`ANTISPAM_${cleanKey}`, botNumber); 
-            } catch (e) {}
-        }
-        status = dbVal || 'off';
-        state.set(chatJid, status);
-    }
-    return status;
-}
-
-async function setAntiSpamStatus(botNumber, chatJid, status) {
-    const state = getAntiSpamState(botNumber);
-    state.set(chatJid, status);
-    
+async function loadOwnerList(botNumber) {
     try {
-        await handleSettingUpdate(`ANTISPAM_${chatJid}`, status, () => {}, botNumber);
+        const savedList = await get('OWNER_LIST', botNumber);
+        if (savedList) {
+            const parsed = JSON.parse(savedList);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                const merged = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
+                OWNER_LIST = merged;
+                console.log(`✅ Owner list loaded: ${OWNER_LIST.join(', ')}`);
+                return;
+            }
+        }
+        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
     } catch (e) {
-        try {
-            const cleanKey = chatJid.replace(/[^0-9]/g, '');
-            await handleSettingUpdate(`ANTISPAM_${cleanKey}`, status, () => {}, botNumber);
-        } catch (e2) {}
-    }
-}
-
-// ==========================================
-// 🔑 VVP Silent Helpers (2 emojis trigger)
-// ==========================================
-function getVvpEmojis(botNumber) {
-    if (!vvpEmojis.has(botNumber)) {
-        vvpEmojis.set(botNumber, '❤️,🔥');
-    }
-    return vvpEmojis.get(botNumber);
-}
-
-async function loadVvpSettings(botNumber) {
-    try {
-        const emojis = await get('VVP_EMOJIS', botNumber);
-        if (emojis) {
-            vvpEmojis.set(botNumber, emojis);
-        }
-    } catch (e) {}
-}
-
-async function saveVvpSettings(botNumber) {
-    try {
-        await handleSettingUpdate('VVP_EMOJIS', getVvpEmojis(botNumber), () => {}, botNumber);
-    } catch (e) {}
-}
-
-// ==========================================
-// 🔑 Status Reaction Helpers (.statusr)
-// ==========================================
-function getStatusReactionEmoji(botNumber) {
-    if (!statusReactionEmojis.has(botNumber)) {
-        statusReactionEmojis.set(botNumber, '');
-    }
-    return statusReactionEmojis.get(botNumber);
-}
-
-async function loadStatusReactionSettings(botNumber) {
-    try {
-        const emoji = await get('STATUS_REACTION_EMOJI', botNumber);
-        if (emoji) {
-            statusReactionEmojis.set(botNumber, emoji);
-        }
-    } catch (e) {}
-}
-
-async function saveStatusReactionSettings(botNumber) {
-    try {
-        await handleSettingUpdate('STATUS_REACTION_EMOJI', getStatusReactionEmoji(botNumber), () => {}, botNumber);
-    } catch (e) {}
-}
-
-// ==========================================
-// 🔑 GLOBAL Owner List Loader
-// ==========================================
-async function loadGlobalOwnerList() {
-    try {
-        const allSessions = await Session.find({});
-        for (const session of allSessions) {
-            try {
-                const savedList = await get('OWNER_LIST', session.number);
-                if (savedList) {
-                    const parsed = JSON.parse(savedList);
-                    if (Array.isArray(parsed) && parsed.length > 0) {
-                        const merged = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
-                        GLOBAL_OWNER_LIST = merged;
-                        GLOBAL_OWNER_LIST_LOADED = true;
-                        console.log(`✅ Global owner list loaded: ${GLOBAL_OWNER_LIST.join(', ')}`);
-                        return;
-                    }
-                }
-            } catch (e) {}
-        }
-        GLOBAL_OWNER_LIST = [...MAIN_OWNER_NUMBERS];
-        GLOBAL_OWNER_LIST_LOADED = true;
-    } catch (e) {
-        GLOBAL_OWNER_LIST = [...MAIN_OWNER_NUMBERS];
-        GLOBAL_OWNER_LIST_LOADED = true;
-    }
-}
-
-async function saveGlobalOwnerList() {
-    try {
-        const allSessions = await Session.find({});
-        for (const session of allSessions) {
-            try {
-                await handleSettingUpdate('OWNER_LIST', JSON.stringify(GLOBAL_OWNER_LIST), () => {}, session.number);
-            } catch (e) {}
-        }
-        console.log(`✅ Owner list saved to ${allSessions.length} sessions`);
-    } catch (e) {
-        console.log('⚠️ Failed to save global owner list:', e.message);
+        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
+        console.log('⚠️ Could not load owner list, using defaults');
     }
 }
 
@@ -450,7 +259,7 @@ setInterval(() => {
 }, 120000);
 
 // ==========================================
-// 🔑 Get Owner Number from DB
+// 🔑 Get Owner Number from DB (per bot session)
 // ==========================================
 async function getOwnerNumber(botNumber) {
     try {
@@ -563,7 +372,7 @@ async function sendWithTyping(sock, jid, message, options = {}) {
 }
 
 // ==========================================
-// 🔧 Sticker Conversion
+// 🔧 FIXED: Sticker Conversion - WhatsApp Compatible
 // ==========================================
 async function convertToSticker(buffer, isVideo = false) {
     try {
@@ -576,6 +385,7 @@ async function convertToSticker(buffer, isVideo = false) {
         console.log(`[STICKER] Input: ${meta.width}x${meta.height}, format: ${meta.format}, animated: ${!!isVideo}`);
 
         if (isVideo) {
+            // Try animated first
             try {
                 const result = await sharp(buffer, {
                     animated: true,
@@ -606,6 +416,7 @@ async function convertToSticker(buffer, isVideo = false) {
                 console.log('[STICKER] Animated failed, trying first frame:', animErr.message);
             }
 
+            // Fallback to static first frame
             try {
                 const result = await sharp(buffer, { 
                     animated: false, 
@@ -631,6 +442,7 @@ async function convertToSticker(buffer, isVideo = false) {
                 return buffer;
             }
         } else {
+            // Static image sticker
             const result = await sharp(buffer, {
                 limitInputPixels: false,
                 failOnError: false
@@ -667,7 +479,7 @@ async function convertToSticker(buffer, isVideo = false) {
 }
 
 // ==========================================
-// 🔧 TTS Audio Conversion
+// 🔧 TTS Audio Conversion - Phone Compatible
 // ==========================================
 async function convertTtsToOpus(mp3Buffer) {
     try {
@@ -707,32 +519,8 @@ async function convertTtsToOpus(mp3Buffer) {
 }
 
 // ==========================================
-// 🔧 Download Helpers
+// 🔧 DOWNLOAD HELPERS - NIM API
 // ==========================================
-async function downloadUrlToBuffer(url, maxRetries = 3) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            const response = await axios.get(url, {
-                responseType: 'arraybuffer',
-                timeout: 60000,
-                maxRedirects: 5,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': '*/*',
-                    'Accept-Language': 'en-US,en;q=0.9'
-                }
-            });
-            
-            if (response.data && response.data.length > 1000) {
-                return Buffer.from(response.data);
-            }
-        } catch (e) {
-            console.log(`[DOWNLOAD] Attempt ${attempt}/${maxRetries} failed: ${e.message}`);
-            if (attempt < maxRetries) await delay(2000);
-        }
-    }
-    return null;
-}
 
 async function downloadYoutubeAudio(youtubeUrl) {
     try {
@@ -745,9 +533,7 @@ async function downloadYoutubeAudio(youtubeUrl) {
                       || response.data?.result?.audio;
         if (audioUrl && audioUrl.startsWith('http')) {
             console.log('[YT AUDIO] ✅ NIM API succeeded');
-            const buffer = await downloadUrlToBuffer(audioUrl);
-            if (buffer) return buffer;
-            return { url: audioUrl };
+            return audioUrl;
         }
     } catch (e) {
         console.log('[YT AUDIO] NIM API failed:', e.message);
@@ -756,11 +542,7 @@ async function downloadYoutubeAudio(youtubeUrl) {
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) {
-            const buffer = await downloadUrlToBuffer(url);
-            if (buffer) return buffer;
-            return { url };
-        }
+        if (url && url.startsWith('http')) return url;
     } catch (e) {}
 
     return null;
@@ -777,9 +559,7 @@ async function downloadYoutubeVideo(youtubeUrl) {
                       || response.data?.downloadUrl;
         if (videoUrl && videoUrl.startsWith('http')) {
             console.log('[YT VIDEO] ✅ NIM API succeeded');
-            const buffer = await downloadUrlToBuffer(videoUrl);
-            if (buffer) return buffer;
-            return { url: videoUrl };
+            return videoUrl;
         }
     } catch (e) {
         console.log('[YT VIDEO] NIM API failed:', e.message);
@@ -788,11 +568,7 @@ async function downloadYoutubeVideo(youtubeUrl) {
     try {
         const { stdout } = await execPromise(`yt-dlp --get-url -f "best[ext=mp4]/best" "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
-        if (url && url.startsWith('http')) {
-            const buffer = await downloadUrlToBuffer(url);
-            if (buffer) return buffer;
-            return { url };
-        }
+        if (url && url.startsWith('http')) return url;
     } catch (e) {}
 
     return null;
@@ -813,9 +589,7 @@ async function downloadTikTok(tiktokUrl) {
                       || response.data?.result?.play;
         if (videoUrl && videoUrl.startsWith('http')) {
             console.log('[TIKTOK] ✅ NIM API succeeded');
-            const buffer = await downloadUrlToBuffer(videoUrl);
-            if (buffer) return buffer;
-            return { url: videoUrl };
+            return videoUrl;
         }
     } catch (e) {
         console.log('[TIKTOK] NIM API failed:', e.message);
@@ -826,9 +600,7 @@ async function downloadTikTok(tiktokUrl) {
         const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url;
         if (url) {
             console.log('[TIKTOK] ✅ siputzx API succeeded');
-            const buffer = await downloadUrlToBuffer(url);
-            if (buffer) return buffer;
-            return { url };
+            return url;
         }
     } catch (e) {
         console.log('[TIKTOK] siputzx API failed');
@@ -850,9 +622,7 @@ async function downloadFacebook(fbUrl) {
                       || response.data?.sd;
         if (videoUrl && videoUrl.startsWith('http')) {
             console.log('[FB] ✅ NIM API succeeded');
-            const buffer = await downloadUrlToBuffer(videoUrl);
-            if (buffer) return buffer;
-            return { url: videoUrl };
+            return videoUrl;
         }
     } catch (e) {
         console.log('[FB] NIM API failed:', e.message);
@@ -861,11 +631,7 @@ async function downloadFacebook(fbUrl) {
     try {
         const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`, { timeout: 30000 });
         const url = apiRes.data?.data?.hd || apiRes.data?.data?.sd || apiRes.data?.url;
-        if (url) {
-            const buffer = await downloadUrlToBuffer(url);
-            if (buffer) return buffer;
-            return { url };
-        }
+        if (url) return url;
     } catch (e) {}
 
     return null;
@@ -1055,184 +821,7 @@ async function useMongoDBAuthState(number) {
 function setupCommandHandlers(socket, number) {
 
     // ==========================================
-    // 🔑 VVP SILENT + STATUS REACTION via EMOJI REACTION
-    // ==========================================
-    socket.ev.on('messages.reaction', async (reactions) => {
-        try {
-            for (const reaction of reactions) {
-                const { key, reaction: reactionData } = reaction;
-                if (!reactionData?.text) continue;
-                
-                const emoji = reactionData.text;
-                
-                // 🔑 Check if this is a STATUS reaction
-                if (key.remoteJid === 'status@broadcast') {
-                    const statusEmoji = getStatusReactionEmoji(number);
-                    
-                    if (statusEmoji && emoji === statusEmoji) {
-                        // Check if this status is from this bot's own number
-                        const statusSender = (key.participant || '').split('@')[0];
-                        
-                        if (statusSender === number) {
-                            console.log(`[STATUS-REACTION] ${emoji} reacted to own status, forwarding silently...`);
-                            
-                            let targetMsg = messageCache.get(key.id);
-                            
-                            if (!targetMsg) {
-                                // Try to find in cache by stanzaId
-                                for (const [cacheKey, value] of messageCache) {
-                                    if (value?.key?.id === key.id) {
-                                        targetMsg = value;
-                                        break;
-                                    }
-                                }
-                            }
-                            
-                            if (!targetMsg || !targetMsg.message) {
-                                console.log(`[STATUS-REACTION] Status message not found in cache`);
-                                continue;
-                            }
-                            
-                            try {
-                                const msgContent = unwrapMessage(targetMsg.message);
-                                const mediaInfo = getMediaType(msgContent);
-                                
-                                const ownJid = `${number}@s.whatsapp.net`;
-                                
-                                if (mediaInfo) {
-                                    const { type: messageType, data: mediaData } = mediaInfo;
-                                    
-                                    const buffer = await downloadMediaMessage(
-                                        {
-                                            key: { 
-                                                remoteJid: 'status@broadcast', 
-                                                id: key.id, 
-                                                participant: key.participant 
-                                            },
-                                            message: targetMsg.message
-                                        },
-                                        'buffer',
-                                        {},
-                                        { logger: pino({ level: 'silent' }) }
-                                    );
-                                    
-                                    const caption = `📸 *Your Status Saved*\n\n🕐 ${new Date().toLocaleString()}`;
-                                    
-                                    if (messageType === 'imageMessage') {
-                                        await socket.sendMessage(ownJid, {
-                                            image: buffer,
-                                            caption: caption
-                                        });
-                                    } else if (messageType === 'videoMessage') {
-                                        await socket.sendMessage(ownJid, {
-                                            video: buffer,
-                                            caption: caption
-                                        });
-                                    } else if (messageType === 'audioMessage') {
-                                        await socket.sendMessage(ownJid, {
-                                            audio: buffer,
-                                            mimetype: mediaData?.mimetype || 'audio/mpeg'
-                                        });
-                                    }
-                                    
-                                    console.log(`[STATUS-REACTION] ✅ Status media saved silently`);
-                                } else {
-                                    // Text status
-                                    let statusText = targetMsg.message?.conversation || 
-                                                    targetMsg.message?.extendedTextMessage?.text || '';
-                                    
-                                    if (statusText) {
-                                        await socket.sendMessage(ownJid, {
-                                            text: `📸 *Your Status Saved*\n\n💬 ${statusText}\n\n🕐 ${new Date().toLocaleString()}`
-                                        });
-                                        console.log(`[STATUS-REACTION] ✅ Text status saved silently`);
-                                    }
-                                }
-                            } catch (e) {
-                                console.log(`[STATUS-REACTION] Error: ${e.message}`);
-                            }
-                        }
-                    }
-                    continue;
-                }
-                
-                // 🔑 Check if this is a VVP (ViewOnce) reaction
-                const myEmojis = getVvpEmojis(number).split(',').map(e => e.trim()).filter(e => e.length > 0);
-                
-                if (!myEmojis.includes(emoji)) continue;
-                
-                // Find the message that was reacted to
-                let targetMsg = messageCache.get(key.id);
-                if (!targetMsg) continue;
-                
-                // Check if it's a view-once message
-                let msgContent = unwrapMessage(targetMsg.message);
-                if (!msgContent) continue;
-                
-                const mediaInfo = getMediaType(msgContent);
-                if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) continue;
-                
-                const originalMsg = targetMsg.message;
-                const isViewOnce = originalMsg?.viewOnceMessage || 
-                                   originalMsg?.viewOnceMessageV2 || 
-                                   originalMsg?.viewOnceMessageV2Extension ||
-                                   (originalMsg?.imageMessage?.viewOnce) ||
-                                   (originalMsg?.videoMessage?.viewOnce);
-                
-                if (!isViewOnce) continue;
-                
-                console.log(`[VVP-EMOJI] ${emoji} reacted to view-once, forwarding silently...`);
-                
-                const { type: messageType, data: mediaData } = mediaInfo;
-                const downloadMsg = {
-                    key: { 
-                        remoteJid: key.remoteJid, 
-                        id: key.id, 
-                        participant: key.participant 
-                    },
-                    message: { [messageType]: mediaData }
-                };
-                
-                try {
-                    const buffer = await downloadMediaMessage(
-                        downloadMsg, 
-                        'buffer', 
-                        {}, 
-                        { logger: pino({ level: 'silent' }) }
-                    );
-                    
-                    // 🔑 Send ONLY to own number SILENTLY
-                    const ownJid = `${number}@s.whatsapp.net`;
-                    const senderName = (key.participant || key.remoteJid).split('@')[0];
-                    const caption = `📥 *View Once Received*\n\n👤 From: @${senderName}\n🕐 ${new Date().toLocaleString()}`;
-                    
-                    if (messageType === 'imageMessage') {
-                        await socket.sendMessage(ownJid, {
-                            image: buffer,
-                            caption: caption,
-                            mentions: [key.participant || key.remoteJid]
-                        });
-                    } else if (messageType === 'videoMessage') {
-                        await socket.sendMessage(ownJid, {
-                            video: buffer,
-                            caption: caption,
-                            mentions: [key.participant || key.remoteJid]
-                        });
-                    }
-                    
-                    console.log(`[VVP-EMOJI] ✅ Forwarded silently to own number`);
-                    
-                } catch (e) {
-                    console.log(`[VVP-EMOJI] Error: ${e.message}`);
-                }
-            }
-        } catch (e) {
-            console.error('[VVP-EMOJI] Handler error:', e.message);
-        }
-    });
-
-    // ==========================================
-    // Anti-Delete handler
+    // Anti-Delete handler - FIXED: per-session
     // ==========================================
     socket.ev.on('messages.update', async (updates) => {
         try {
@@ -1285,6 +874,7 @@ function setupCommandHandlers(socket, number) {
 
                 console.log(`[ANTI-DELETE] ✅ Captured: ${senderJid} - ${messageText.substring(0, 50)}`);
 
+                // 🔑 FIXED: Check nodelete status ONLY for THIS bot session
                 const nodeleteStatus = await getNodeleteStatus(number, chatJid);
                 
                 if (nodeleteStatus === 'on') {
@@ -1352,7 +942,7 @@ ${messageText}
                            (msg.key.fromMe && isMainOwnerNumber(number));
 
         // ==========================================
-        // 🔑 AUTO-SAVE Feature
+        // 🔑 AUTO-SAVE Feature - FIXED: react removed
         // ==========================================
         if (!sender.endsWith('@g.us') && !msg.key.fromMe) {
             try {
@@ -1368,6 +958,7 @@ ${messageText}
                     const autoSaveName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
                     const pushName = msg.pushName || senderNumber;
                     
+                    // 🔑 FIXED: No react - just silent save logging
                     console.log(`[AUTOSAVE] Saved ${senderNumber} as "${autoSaveName} ${pushName}"`);
                 }
             } catch (e) {}
@@ -1407,65 +998,6 @@ ${messageText}
 
             return sentMsg;
         };
-
-        // ==========================================
-        // 🛡️ ANTI-SPAM CHECK
-        // ==========================================
-        if (!msg.key.fromMe) {
-            try {
-                const antiSpamStatus = await getAntiSpamStatus(number, sender);
-                
-                if (antiSpamStatus === 'on') {
-                    const spamKey = `${number}_${sender}_${senderNumber}`;
-                    const now = Date.now();
-                    
-                    if (!global.spamTracker) global.spamTracker = new Map();
-                    
-                    let tracker = global.spamTracker.get(spamKey) || { messages: [], warned: 0 };
-                    tracker.messages = tracker.messages.filter(t => now - t.time < 10000);
-                    
-                    const isDuplicate = tracker.messages.some(m => 
-                        m.body.toLowerCase() === body.toLowerCase() && now - m.time < 10000
-                    );
-                    
-                    tracker.messages.push({ body, time: now });
-                    global.spamTracker.set(spamKey, tracker);
-                    
-                    const recentCount = tracker.messages.length;
-                    
-                    if (recentCount >= 5 && isDuplicate) {
-                        tracker.warned++;
-                        
-                        try {
-                            await socket.sendMessage(sender, { delete: msg.key });
-                        } catch (e) {}
-                        
-                        if (tracker.warned <= 3) {
-                            await socket.sendMessage(sender, {
-                                text: `🚫 *SPAM DETECTED!*\n\n👤 @${senderNumber}\n⚠️ Warning ${tracker.warned}/3\n\n💡 Stop spamming!${FOOTER}`,
-                                mentions: [msg.key.participant || sender],
-                                contextInfo: channelInfo
-                            });
-                        } else {
-                            if (sender.endsWith('@g.us')) {
-                                try {
-                                    await socket.groupParticipantsUpdate(sender, [msg.key.participant], 'remove');
-                                    await socket.sendMessage(sender, {
-                                        text: `👢 *KICKED FOR SPAM*\n\n@${senderNumber} has been removed for spamming!${FOOTER}`,
-                                        mentions: [msg.key.participant],
-                                        contextInfo: channelInfo
-                                    });
-                                } catch (e) {}
-                            }
-                            tracker.warned = 0;
-                        }
-                        
-                        global.spamTracker.set(spamKey, tracker);
-                        return;
-                    }
-                }
-            } catch (e) {}
-        }
 
         // Per-Group Anti-Link Check
         if (sender.endsWith('@g.us') && !msg.key.fromMe) {
@@ -1530,63 +1062,57 @@ ${messageText}
                     if (pending.type === 'youtube') {
                         await reply(`📥 Downloading ${choice === 1 ? 'Video 🎬' : 'Audio 🎵'}... ⏳` + FOOTER);
                         
-                        let mediaData;
+                        let mediaUrl;
                         if (choice === 1) {
-                            mediaData = await downloadYoutubeVideo(pending.url);
+                            mediaUrl = await downloadYoutubeVideo(pending.url);
                         } else {
-                            mediaData = await downloadYoutubeAudio(pending.url);
+                            mediaUrl = await downloadYoutubeAudio(pending.url);
                         }
                         
-                        if (!mediaData) {
+                        if (!mediaUrl) {
                             return reply(`❌ Download failed! Try again.` + FOOTER);
                         }
                         
-                        const isBuffer = Buffer.isBuffer(mediaData);
-                        const source = isBuffer ? mediaData : mediaData.url;
-                        
                         if (choice === 1) {
                             await socket.sendMessage(sender, {
-                                video: isBuffer ? mediaData : { url: source },
+                                video: { url: mediaUrl },
                                 caption: `🎬 *YouTube Video*\n\n📝 ${pending.title || ''}` + FOOTER,
                                 contextInfo: channelInfo
                             }, { quoted: msg });
                         } else {
                             await socket.sendMessage(sender, {
-                                audio: isBuffer ? mediaData : { url: source },
+                                audio: { url: mediaUrl },
                                 mimetype: 'audio/mpeg',
                                 fileName: `${pending.title || 'audio'}.mp3`,
                                 contextInfo: channelInfo
                             }, { quoted: msg });
                         }
                     } else if (pending.type === 'tiktok') {
-                        const mediaData = await downloadTikTok(pending.url);
-                        if (!mediaData) return reply(`❌ TikTok download failed!` + FOOTER);
+                        const videoUrl = await downloadTikTok(pending.url);
+                        if (!videoUrl) return reply(`❌ TikTok download failed!` + FOOTER);
                         
-                        const isBuffer = Buffer.isBuffer(mediaData);
                         await socket.sendMessage(sender, {
-                            video: isBuffer ? mediaData : { url: mediaData.url },
+                            video: { url: videoUrl },
                             caption: `🎬 *TikTok Video*` + FOOTER,
                             contextInfo: channelInfo
                         }, { quoted: msg });
                     } else if (pending.type === 'song') {
                         if (choice === 1) {
-                            const mediaData = await downloadYoutubeAudio(pending.url);
-                            if (!mediaData) return reply(`❌ Song download failed!` + FOOTER);
+                            const audioUrl = await downloadYoutubeAudio(pending.url);
+                            if (!audioUrl) return reply(`❌ Song download failed!` + FOOTER);
                             
-                            const isBuffer = Buffer.isBuffer(mediaData);
                             await socket.sendMessage(sender, {
-                                audio: isBuffer ? mediaData : { url: mediaData.url },
+                                audio: { url: audioUrl },
                                 mimetype: 'audio/mpeg',
                                 fileName: `${pending.title || 'song'}.mp3`,
                                 contextInfo: channelInfo
                             }, { quoted: msg });
                         } else {
-                            const mediaData = await downloadYoutubeVideo(pending.url);
-                            if (!mediaData) return reply(`❌ Video download failed!` + FOOTER);
+                            const videoUrl = await downloadYoutubeVideo(pending.url);
+                            if (!videoUrl) return reply(`❌ Video download failed!` + FOOTER);
                             
-                            const isBuffer = Buffer.isBuffer(mediaData);
                             await socket.sendMessage(sender, {
-                                video: isBuffer ? mediaData : { url: mediaData.url },
+                                video: { url: videoUrl },
                                 caption: `🎬 *${pending.title || 'Video'}*` + FOOTER,
                                 contextInfo: channelInfo
                             }, { quoted: msg });
@@ -1600,15 +1126,34 @@ ${messageText}
             }
         }
 
-        // ==========================================
-        // 🔑 MENU REPLY HANDLER - ONLY own bot's menu
-        // ==========================================
+        // MENU REPLY HANDLER
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
         const quotedStanzaId = contextInfo?.stanzaId || '';
         
-        const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
+        let quotedText = '';
+        const qm = contextInfo?.quotedMessage || {};
+        if (qm.conversation) {
+            quotedText = qm.conversation;
+        } else if (qm.extendedTextMessage?.text) {
+            quotedText = qm.extendedTextMessage.text;
+        } else if (qm.imageMessage?.caption) {
+            quotedText = qm.imageMessage.caption;
+        } else if (qm.videoMessage?.caption) {
+            quotedText = qm.videoMessage.caption;
+        }
 
-        if (!isCommand && body.match(/^[1-7]$/) && isBotMenuMessage) {
+        const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
+        
+        const hasMenuKeywords = quotedText.includes('𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨') || 
+                               quotedText.includes('MENU CATEGORIES') ||
+                               quotedText.includes('Reply to this message with a number') ||
+                               (quotedText.includes('DOWNLOAD COMMANDS') && quotedText.includes('SETTINGS COMMANDS')) ||
+                               (quotedText.includes('1️⃣') && quotedText.includes('2️⃣') && quotedText.includes('3️⃣')) ||
+                               (quotedText.includes('Reply 0') && quotedText.includes('Main Menu'));
+
+        const isMenuReply = isBotMenuMessage || hasMenuKeywords;
+
+        if (!isCommand && body.match(/^[1-7]$/) && isMenuReply) {
             const categoryNum = parseInt(body);
             let categoryMenu = '';
 
@@ -1624,6 +1169,7 @@ ${messageText}
 *┃ 🎬 .movie [name] - Movie Download*
 *┃ 🔗 .tourl / .url*
 *┃ 📸 .vv / .viewonce*
+*┃ 📸 .vvp / .vvpowner*
 *┃ 📥 .send / .save*
 *╰──────────────────────*
 
@@ -1642,9 +1188,7 @@ ${messageText}
 *┃ 🔗 .antilink [on/off]*
 *┃ 👋 .welcome [on/off]*
 *┃ 🗑️ .nodelet [on/off]*
-*┃ 💾 .autosave [on/off]*
-*┃ 🛡️ .antispam [on/off]*
-*┃ 📸 .statusr [emoji] - Status Save*
+*┃ 💾 .autosave [on/off] - NEW*
 *┃ 🔤 .setprefix [prefix]*
 *╰──────────────────────*
 
@@ -1657,8 +1201,7 @@ ${messageText}
 *┃ 📋 .settings*
 *┃ 📊 .active*
 *┃ 🔗 .pair [number]*
-*┃ 📞 .vvpr [emoji1,emoji2] - VVP emojis*
-*┃ 📸 .statusr [emoji] - Status Save emoji*
+*┃ 📞 .vvpowner [number]*
 *┃ 🔤 .setprefix [prefix]*
 *┃ 💾 .setreply [trigger] [response]*
 *┃ 💾 .delreply [trigger]*
@@ -1717,7 +1260,6 @@ ${messageText}
 *┃ 📊 .ginfo / .groupinfo*
 *┃ 📊 .poll [Q|opt1|opt2]*
 *┃ 📞 .getcontact*
-*┃ 🛡️ .antispam [on/off]*
 *╰──────────────────────*
 
 💡 *Reply 0 to go back to Main Menu*`;
@@ -1751,7 +1293,7 @@ ${messageText}
             return;
         }
 
-        if (!isCommand && body === '0' && isBotMenuMessage) {
+        if (!isCommand && body === '0' && isMenuReply) {
             const botName = await get('BOT_NAME', number) || 'NIM BOT';
             const isFollowing = await checkChannelFollow(socket, msg.key.participant || sender);
             const followStatus = isFollowing ? '✅ Followed' : '❌ Not Followed';
@@ -1805,7 +1347,7 @@ ${messageText}
         }
 
         // ==========================================
-        // 🔧 AUTO-REPLY - Per-session + BOT FILTER
+        // 🔧 AUTO-REPLY - FIXED: Per-session
         // ==========================================
         const autoReplyState = getAutoReplyState(number);
         const autoReplyMode = autoReplyState.mode;
@@ -1821,15 +1363,23 @@ ${messageText}
                 const textLower = body.toLowerCase().trim();
                 const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
                 
-                // 🛡️ FIXED: Skip if message is from another bot
-                if (isFromBot || isBotMessage(msg)) {
-                    return;
-                }
+                const botResponsePatterns = [
+                    'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
+                    'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
+                    '🤖 *ai assistant*', '🎵 *song', '📥 *', '🎬 *', '⚠️ *', '❌ *',
+                    '✅ *', '⚙️ *', '👀', '🏓 *pong', '💾 *autosave',
+                    'view once', 'deleted message', 'nim bot', 'creator by nimsara'
+                ];
+                
+                const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
+                
+                if (isFromBot || isBotResponse) return;
 
                 if (!canAutoReply(number, sender)) {
                     return;
                 }
 
+                // Check custom replies for THIS session only
                 if (autoReplyState.customReplies[textLower]) {
                     await reply(autoReplyState.customReplies[textLower] + FOOTER);
                     return;
@@ -1936,15 +1486,14 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // 🔒 .nimcmd - MAIN OWNERS ONLY (GLOBAL)
+                // 🔒 .nimcmd - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    // 🔑 FIXED: Check if sender is in GLOBAL owner list (gives access in ANY session)
-                    if (!isOwnerNumber(senderNumber) && !isMainOwner) {
+                    if (!isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only bot owners can use this command!
+💡 Only MAIN bot owners can use this command!
 
 🔒 *Main Owners:*
 • +94784280074
@@ -1956,7 +1505,7 @@ id - 842717887
                     if (!action) {
                         let ownerListText = `👑 *NIM OWNER MANAGEMENT*\n\n`;
                         ownerListText += `📊 *Current Owner Numbers:*\n\n`;
-                        GLOBAL_OWNER_LIST.forEach((num, i) => {
+                        OWNER_LIST.forEach((num, i) => {
                             const isMain = MAIN_OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
                             ownerListText += `${i+1}. +${num}${isMain}\n`;
                         });
@@ -1964,51 +1513,36 @@ id - 842717887
                         ownerListText += `• .nimcmd add [number]\n`;
                         ownerListText += `• .nimcmd remove [number]\n`;
                         ownerListText += `• .nimcmd list\n`;
+                        ownerListText += `• .nimcmd setname [name]\n`;
+                        ownerListText += `• .nimcmd setlogo [url]\n`;
                         ownerListText += `• .nimcmd reset\n`;
-                        ownerListText += `\n🔒 = Protected main owner\n`;
-                        ownerListText += `\n💡 *Global:* Changes affect ALL sessions!`;
+                        ownerListText += `\n🔒 = Protected main owner`;
                         return reply(ownerListText + FOOTER);
                     }
                     
-                    // 🔑 ADD/REMOVE only allowed by MAIN owners
-                    if (action === 'add' || action === 'addowner') {
-                        if (!isMainOwner) {
-                            return reply(`⚠️ *Access Denied!*
-
-💡 Only MAIN owners can add new owners!
-
-🔒 *Main Owners:*
-• +94784280074
-• +94701726411` + FOOTER);
-                        }
-                        
+                    if (action === 'add') {
                         const newNum = args[1]?.replace(/[^0-9]/g, '');
                         if (!newNum || newNum.length < 9) {
                             return reply(`⚠️ Usage: .nimcmd add [number]\nExample: .nimcmd add 94771234567` + FOOTER);
                         }
                         
-                        if (GLOBAL_OWNER_LIST.includes(newNum)) {
+                        if (OWNER_LIST.includes(newNum)) {
                             return reply(`⚠️ Number already in owner list!` + FOOTER);
                         }
                         
-                        GLOBAL_OWNER_LIST.push(newNum);
-                        await saveGlobalOwnerList();
+                        OWNER_LIST.push(newNum);
                         
-                        await reply(`✅ *Owner Added Globally!*
+                        try {
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
+                        
+                        await reply(`✅ *Owner Added!*
 
 📱 *Number:* +${newNum}
-📊 *Total Owners:* ${GLOBAL_OWNER_LIST.length}
+📊 *Total Owners:* ${OWNER_LIST.length}
 
-🌐 *Applied to ALL sessions!*
-
-💡 This number can now use owner commands in ANY session!` + FOOTER);
-                    } else if (action === 'remove' || action === 'delowner') {
-                        if (!isMainOwner) {
-                            return reply(`⚠️ *Access Denied!*
-
-💡 Only MAIN owners can remove owners!` + FOOTER);
-                        }
-                        
+💡 This number can now use owner commands!` + FOOTER);
+                    } else if (action === 'remove') {
                         const remNum = args[1]?.replace(/[^0-9]/g, '');
                         if (!remNum) {
                             return reply(`⚠️ Usage: .nimcmd remove [number]` + FOOTER);
@@ -2024,38 +1558,45 @@ Main owners:
 • +94701726411` + FOOTER);
                         }
                         
-                        const idx = GLOBAL_OWNER_LIST.indexOf(remNum);
+                        const idx = OWNER_LIST.indexOf(remNum);
                         if (idx === -1) {
                             return reply(`⚠️ Number not in owner list!` + FOOTER);
                         }
                         
-                        GLOBAL_OWNER_LIST.splice(idx, 1);
-                        await saveGlobalOwnerList();
+                        OWNER_LIST.splice(idx, 1);
                         
-                        await reply(`✅ *Owner Removed Globally!*
+                        try {
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
+                        
+                        await reply(`✅ *Owner Removed!*
 
 📱 *Number:* +${remNum}
-📊 *Total Owners:* ${GLOBAL_OWNER_LIST.length}
-
-🌐 *Applied to ALL sessions!*` + FOOTER);
+📊 *Total Owners:* ${OWNER_LIST.length}` + FOOTER);
                     } else if (action === 'list') {
-                        let listText = `👑 *OWNER LIST (GLOBAL)*\n\n`;
-                        GLOBAL_OWNER_LIST.forEach((num, i) => {
+                        let listText = `👑 *OWNER LIST*\n\n`;
+                        OWNER_LIST.forEach((num, i) => {
                             const isMain = MAIN_OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
                             listText += `${i+1}. +${num}${isMain}\n`;
                         });
                         listText += `\n🔒 = Protected main owner`;
-                        listText += `\n🌐 = Global across all sessions`;
                         await reply(listText + FOOTER);
-                    } else if (action === 'reset') {
-                        if (!isMainOwner) {
-                            return reply(`⚠️ *Access Denied!* Only MAIN owners can reset!` + FOOTER);
+                    } else if (action === 'setname') {
+                        const newName = args.slice(1).join(' ');
+                        if (!newName) return reply(`⚠️ Usage: .nimcmd setname [name]` + FOOTER);
+                        await handleSettingUpdate("BOT_NAME", newName, reply, number);
+                    } else if (action === 'setlogo') {
+                        const logoUrl = args[1];
+                        if (!logoUrl || !logoUrl.startsWith('http')) {
+                            return reply(`⚠️ Usage: .nimcmd setlogo [image_url]` + FOOTER);
                         }
-                        GLOBAL_OWNER_LIST = [...MAIN_OWNER_NUMBERS];
-                        await saveGlobalOwnerList();
-                        await reply(`✅ Owner list reset to default (main owners only)!
-
-🌐 *Applied to ALL sessions!*` + FOOTER);
+                        await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
+                    } else if (action === 'reset') {
+                        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
+                        try {
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
+                        await reply(`✅ Owner list reset to default (main owners only)!` + FOOTER);
                     } else {
                         await reply(`⚠️ Unknown action! Use .nimcmd for help.` + FOOTER);
                     }
@@ -2063,7 +1604,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔒 .setbotname - MAIN OWNERS ONLY
+                // 🔒 .setbotname - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'setbotname':
                 case 'botname': {
@@ -2080,7 +1621,7 @@ Main owners:
                     const newName = args.join(' ');
                     if (!newName) {
                         const currentName = await get('BOT_NAME', number) || 'NIM BOT';
-                        return reply(`📛 *BOT NAME SETTINGS*\n\n📊 *Current:* ${currentName}\n📌 *Original:* ${ORIGINAL_BOT_NAME}\n\n*Usage:* .setbotname [new name]` + FOOTER);
+                        return reply(`📛 *BOT NAME SETTINGS*\n\n📊 *Current:* ${currentName}\n\n*Usage:* .setbotname [new name]` + FOOTER);
                     }
                     
                     await handleSettingUpdate("BOT_NAME", newName, reply, number);
@@ -2088,7 +1629,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔒 .setlogo - MAIN OWNERS ONLY
+                // 🔒 .setlogo - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'setlogo':
                 case 'botlogo': {
@@ -2139,206 +1680,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔑 .reset - Reset name & logo
-                // ==========================================
-                case 'reset':
-                case 'resetbot': {
-                    if (!isMainOwner) {
-                        return reply(`⚠️ *Access Denied!*
-
-💡 Only MAIN bot owners can reset the bot!
-
-🔒 *Main Owners:*
-• +94784280074
-• +94701726411` + FOOTER);
-                    }
-                    
-                    const resetType = args[0]?.toLowerCase();
-                    
-                    if (!resetType || resetType === 'all') {
-                        await handleSettingUpdate("BOT_NAME", ORIGINAL_BOT_NAME, () => {}, number);
-                        await handleSettingUpdate("BOT_LOGO", ORIGINAL_BOT_LOGO, () => {}, number);
-                        
-                        await reply(`✅ *BOT RESET SUCCESSFUL!*
-
-📛 *Name:* ${ORIGINAL_BOT_NAME}
-🖼️ *Logo:* Restored to original
-🔤 *Prefix:* Unchanged
-
-> _Bot restored to factory defaults!_` + FOOTER);
-                    } else if (resetType === 'name') {
-                        await handleSettingUpdate("BOT_NAME", ORIGINAL_BOT_NAME, () => {}, number);
-                        await reply(`✅ *BOT NAME RESET!*
-
-📛 *Name:* ${ORIGINAL_BOT_NAME}` + FOOTER);
-                    } else if (resetType === 'logo') {
-                        await handleSettingUpdate("BOT_LOGO", ORIGINAL_BOT_LOGO, () => {}, number);
-                        await reply(`✅ *BOT LOGO RESET!*
-
-🖼️ Logo restored to original!` + FOOTER);
-                    } else {
-                        await reply(`🔄 *RESET COMMANDS*
-
-*Usage:*
-• .reset - Reset both name & logo
-• .reset name - Reset name only
-• .reset logo - Reset logo only
-
-📌 *Original Name:* ${ORIGINAL_BOT_NAME}` + FOOTER);
-                    }
-                    break;
-                }
-
-                // ==========================================
-                // 🔑 .vvpr - Set VVP emoji triggers (2 emojis)
-                // ==========================================
-                case 'vvpr':
-                case 'setvvp': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const emojiInput = args.join(' ').trim();
-                    
-                    if (!emojiInput) {
-                        const currentEmojis = getVvpEmojis(number);
-                        return reply(`📞 *VVP EMOJI SETTINGS*
-
-📊 *Current Emoji(s):* ${currentEmojis}
-
-*Usage:*
-• .vvpr ❤️,🔥 - Two emojis
-• .vvpr ❤️ - Single emoji
-
-💡 React with either emoji on any ViewOnce message → silently forwarded to your own number!
-
-🔒 *Silent:* No reply, no reaction, no notification.` + FOOTER);
-                    }
-                    
-                    const emojiList = emojiInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
-                    
-                    if (emojiList.length === 0) {
-                        return reply(`⚠️ Please provide at least one emoji!` + FOOTER);
-                    }
-                    
-                    if (emojiList.length > 2) {
-                        return reply(`⚠️ Maximum 2 emojis allowed!` + FOOTER);
-                    }
-                    
-                    const emojiString = emojiList.join(',');
-                    vvpEmojis.set(number, emojiString);
-                    await saveVvpSettings(number);
-                    
-                    await reply(`✅ *VVP EMOJI UPDATED!*
-
-📊 *New Emoji(s):* ${emojiString}
-
-💡 React with ${emojiList.map(e => `"${e}"`).join(' or ')} on any ViewOnce message → silently forwarded to your own number!
-
-🔒 *Silent Mode:* No reaction, no reply, no notification to sender.` + FOOTER);
-                    break;
-                }
-
-                // ==========================================
-                // 🔑 .statusr - Set status reaction emoji
-                // ==========================================
-                case 'statusr':
-                case 'setstatusr': {
-                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    
-                    const emojiInput = args.join(' ').trim();
-                    
-                    if (!emojiInput) {
-                        const currentEmoji = getStatusReactionEmoji(number);
-                        return reply(`📸 *STATUS REACTION SETTINGS*
-
-📊 *Current Emoji:* ${currentEmoji || '_Not set_'}
-
-*Usage:* \`.statusr ❤️\`
-
-💡 React with this emoji on your OWN status → status media saved silently to your own number!
-
-🔒 *Silent:* No reply, no notification.` + FOOTER);
-                    }
-                    
-                    // Take only first emoji
-                    const emojiList = emojiInput.split(',').map(e => e.trim()).filter(e => e.length > 0);
-                    const emoji = emojiList[0];
-                    
-                    if (!emoji) {
-                        return reply(`⚠️ Please provide an emoji!` + FOOTER);
-                    }
-                    
-                    statusReactionEmojis.set(number, emoji);
-                    await saveStatusReactionSettings(number);
-                    
-                    await reply(`✅ *STATUS REACTION SET!*
-
-📊 *Emoji:* ${emoji}
-
-💡 React with "${emoji}" on your OWN status → status saved silently to your number!
-
-🔒 *Silent Mode:* No reply, no notification.` + FOOTER);
-                    break;
-                }
-
-                // ==========================================
-                // 🔑 .antispam - Inbox + Group support
-                // ==========================================
-                case 'antispam': {
-                    const val = args[0]?.toLowerCase();
-                    const targetChat = sender;
-                    
-                    if (sender.endsWith('@g.us')) {
-                        let isAdmin = msg.key.fromMe;
-                        if (!isAdmin) {
-                            try {
-                                const meta = await socket.groupMetadata(sender);
-                                const participant = meta.participants.find(p => p.id === msg.key.participant);
-                                isAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
-                            } catch (e) {}
-                        }
-                        
-                        if (!isAdmin) {
-                            return reply(`⚠️ Only group admins or bot owner!` + FOOTER);
-                        }
-                    } else {
-                        if (!isOwnerUser) {
-                            return reply(`⚠️ Only Bot Owner can use this in Inbox!` + FOOTER);
-                        }
-                    }
-                    
-                    const current = await getAntiSpamStatus(number, targetChat);
-                    
-                    if (!val || !['on', 'off'].includes(val)) {
-                        return reply(`🛡️ *ANTISPAM STATUS*
-
-📊 *Current:* ${current === 'on' ? '✅ ON' : '❌ OFF'}
-📍 *Chat:* This ${sender.endsWith('@g.us') ? 'Group' : 'Inbox'} only
-
-*Usage:*
-• \`.antispam on\` - Enable anti-spam
-• \`.antispam off\` - Disable
-
-💡 When ON:
-• Deletes repeated/spam messages
-• Warns user 3 times
-• Kicks user after 3 warnings (groups only)
-
-🛡️ *Protection: Active*` + FOOTER);
-                    }
-                    
-                    await setAntiSpamStatus(number, targetChat, val);
-                    
-                    await reply(`✅ *ANTISPAM ${val === 'on' ? 'ENABLED' : 'DISABLED'}*
-
-📊 *Status:* ${val === 'on' ? '✅ ON' : '❌ OFF'}
-📍 *Chat:* This ${sender.endsWith('@g.us') ? 'Group' : 'Inbox'} only
-
-💡 ${val === 'on' ? 'Spam messages will be auto-deleted!' : 'Anti-spam disabled.'}` + FOOTER);
-                    break;
-                }
-
-                // ==========================================
-                // 🔑 .autosave
+                // 🔑 .autosave - Regular Owner
                 // ==========================================
                 case 'autosave': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -2393,7 +1735,44 @@ Main owners:
                 }
 
                 // ==========================================
-                // .pair
+                // .vvpowner - Regular Owner
+                // ==========================================
+                case 'vvpowner':
+                case 'setvvpowner':
+                case 'setowner': {
+                    if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    
+                    const newOwnerNumber = args[0]?.replace(/[^0-9]/g, '');
+                    
+                    if (!newOwnerNumber) {
+                        const currentOwner = await getOwnerNumber(number);
+                        return reply(`📞 *VVP OWNER SETTINGS*
+
+📊 *Current Owner:* +${currentOwner}
+
+*Usage:* \`.vvpowner [number]\`
+*Example:* \`.vvpowner 94784280074\`
+
+💡 This number will receive all ViewOnce media via .vvp command!` + FOOTER);
+                    }
+                    
+                    if (newOwnerNumber.length < 9 || newOwnerNumber.length > 15) {
+                        return reply(`❌ *Invalid number!*
+
+📝 Format: 94784280074
+📏 Length: 9-15 digits` + FOOTER);
+                    }
+                    
+                    try {
+                        await handleSettingUpdate("OWNER_NUMBER", newOwnerNumber, reply, number);
+                    } catch (e) {
+                        await reply(`❌ Failed to save: ${e.message}` + FOOTER);
+                    }
+                    break;
+                }
+
+                // ==========================================
+                // .pair - Regular Owner
                 // ==========================================
                 case 'pair':
                 case 'paircode': {
@@ -2475,7 +1854,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .active
+                // .active - Regular Owner
                 // ==========================================
                 case 'active':
                 case 'activeusers': {
@@ -2516,7 +1895,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .nodelet
+                // .nodelet - FIXED: Per-session, per-chat
                 // ==========================================
                 case 'nodelet':
                 case 'nodelete': {
@@ -2611,7 +1990,7 @@ Main owners:
                 }
 
                 // ==========================================
-                // .forward
+                // 📤 .forward - Forward message to JID
                 // ==========================================
                 case 'forward':
                 case 'fwd': {
@@ -2630,12 +2009,15 @@ Main owners:
 💡 Reply to any message (text/media) with this command!` + FOOTER);
                     }
                     
+                    // Normalize JID
                     let normalizedJid = targetJid.trim();
                     
+                    // If it's a phone number, convert to JID
                     if (/^[0-9]+$/.test(normalizedJid)) {
                         normalizedJid = `${normalizedJid}@s.whatsapp.net`;
                     }
                     
+                    // If it's a group number without suffix
                     if (/^[0-9-]+$/.test(normalizedJid)) {
                         normalizedJid = `${normalizedJid}@g.us`;
                     }
@@ -2648,9 +2030,11 @@ Main owners:
                     try {
                         await reply(`📤 Forwarding to \`${normalizedJid}\`... ⏳` + FOOTER);
                         
+                        // Get the quoted message content
                         const qMsg = unwrapMessage(quoted.quotedMessage);
                         const mediaInfo = getMediaType(qMsg);
                         
+                        // Text message
                         if (!mediaInfo) {
                             let textContent = '';
                             if (qMsg.conversation) textContent = qMsg.conversation;
@@ -2671,6 +2055,7 @@ Main owners:
 💬 *Type:* Text` + FOOTER);
                         }
                         
+                        // Media message - download and forward
                         const { type: messageType, data: mediaData } = mediaInfo;
                         
                         const downloadMsg = {
@@ -2808,7 +2193,9 @@ Main owners:
                     break;
                 }
 
-                // SONG
+                // ==========================================
+                // 🔧 SONG - With Quality Selection
+                // ==========================================
                 case 'song': {
                     const query = args.join(' ');
                     if (!query) return reply(`⚠️ Please provide a song name!` + FOOTER);
@@ -2850,7 +2237,9 @@ Main owners:
                     break;
                 }
 
-                // TIKTOK
+                // ==========================================
+                // 🔧 TIKTOK
+                // ==========================================
                 case 'tt':
                 case 'tiktok': {
                     const url = args[0];
@@ -2861,15 +2250,14 @@ Main owners:
                     await reply(`📥 Processing TikTok... ⏳` + FOOTER);
                     
                     try {
-                        const mediaData = await downloadTikTok(url);
+                        const videoUrl = await downloadTikTok(url);
 
-                        if (!mediaData) {
-                            return reply(`❌ TikTok download failed. Try again later.` + FOOTER);
+                        if (!videoUrl) {
+                            return reply(`❌ TikTok link failed.` + FOOTER);
                         }
 
-                        const isBuffer = Buffer.isBuffer(mediaData);
                         await socket.sendMessage(sender, {
-                            video: isBuffer ? mediaData : { url: mediaData.url },
+                            video: { url: videoUrl },
                             caption: `🎬 *TikTok Video*` + FOOTER,
                             contextInfo: channelInfo
                         }, { quoted: msg });
@@ -2880,7 +2268,9 @@ Main owners:
                     break;
                 }
 
-                // YOUTUBE
+                // ==========================================
+                // 🔧 YOUTUBE
+                // ==========================================
                 case 'yt':
                 case 'youtube': {
                     const url = args[0];
@@ -2935,7 +2325,9 @@ Main owners:
                     break;
                 }
 
-                // FACEBOOK
+                // ==========================================
+                // 🔧 FACEBOOK
+                // ==========================================
                 case 'fb':
                 case 'facebook': {
                     const url = args[0];
@@ -2946,13 +2338,12 @@ Main owners:
                     await reply(`📥 Processing Facebook... ⏳` + FOOTER);
                     
                     try {
-                        const mediaData = await downloadFacebook(url);
+                        const videoUrl = await downloadFacebook(url);
 
-                        if (!mediaData) return reply(`❌ Facebook download failed. Try again later.` + FOOTER);
+                        if (!videoUrl) return reply(`❌ Facebook link failed.` + FOOTER);
 
-                        const isBuffer = Buffer.isBuffer(mediaData);
                         await socket.sendMessage(sender, {
-                            video: isBuffer ? mediaData : { url: mediaData.url },
+                            video: { url: videoUrl },
                             caption: `🎬 *Facebook Video*` + FOOTER,
                             contextInfo: channelInfo
                         }, { quoted: msg });
@@ -2963,7 +2354,9 @@ Main owners:
                     break;
                 }
 
-                // INSTAGRAM
+                // ==========================================
+                // 🔧 INSTAGRAM
+                // ==========================================
                 case 'ig':
                 case 'instagram': {
                     const url = args[0];
@@ -3004,7 +2397,9 @@ Main owners:
                     break;
                 }
 
-                // MOVIE
+                // ==========================================
+                // 🔧 MOVIE DOWNLOAD
+                // ==========================================
                 case 'movie':
                 case 'film': {
                     const query = args.join(' ');
@@ -3112,7 +2507,9 @@ Main owners:
                     break;
                 }
 
-                // STICKER
+                // ==========================================
+                // 🔧 STICKER COMMAND - FIXED
+                // ==========================================
                 case 'sticker':
                 case 's': {
                     try {
@@ -3135,6 +2532,7 @@ Main owners:
                         
                         const { type: messageType, data: mediaData } = mediaInfo;
                         
+                        // Handle existing stickers - just re-send
                         if (messageType === 'stickerMessage') {
                             const downloadMsg = {
                                 key: { 
@@ -3189,6 +2587,7 @@ Main owners:
                             return reply(`❌ Sticker conversion failed!` + FOOTER);
                         }
                         
+                        // 🔑 FIXED: Send sticker properly without contextInfo that breaks it
                         await socket.sendMessage(sender, {
                             sticker: stickerBuffer,
                             mimetype: 'image/webp'
@@ -3412,7 +2811,9 @@ Main owners:
                     break;
                 }
 
-                // GETCONTACT
+                // ==========================================
+                // GETCONTACT - Rate Limit Protection (Regular Owner)
+                // ==========================================
                 case 'getcontact':
                 case 'gc': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
@@ -3978,7 +3379,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // .setreply
+                // ==========================================
+                // .setreply - Regular Owner (Per-session)
+                // ==========================================
                 case 'setreply': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
@@ -4284,6 +3687,71 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
+                // VVP
+                case 'vvp':
+                case 'viewoncept': {
+                    const quoted = msg.message?.extendedTextMessage?.contextInfo;
+                    if (!quoted || !quoted.quotedMessage) {
+                        return reply(`⚠️ Reply to View Once media with *${prefix}vvp*` + FOOTER);
+                    }
+
+                    let qMsg = unwrapMessage(quoted.quotedMessage);
+                    if (!qMsg) {
+                        return reply(`⚠️ Could not read quoted message!` + FOOTER);
+                    }
+
+                    const mediaInfo = getMediaType(qMsg);
+                    if (!mediaInfo || !['imageMessage', 'videoMessage'].includes(mediaInfo.type)) {
+                        return reply(`⚠️ Reply to View Once media!` + FOOTER);
+                    }
+
+                    const { type: messageType, data: mediaData } = mediaInfo;
+                    const downloadMsg = {
+                        key: { remoteJid: quoted.remoteJid || sender, id: quoted.stanzaId, participant: quoted.participant },
+                        message: { [messageType]: mediaData }
+                    };
+
+                    try {
+                        await reply(`⏳ Sending to owner privately...` + FOOTER);
+                        
+                        const buffer = await downloadMediaMessage(downloadMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                        const innerMsg = mediaData;
+                        
+                        const ownerNumber = await getOwnerNumber(number);
+                        const senderName = (msg.key.participant || sender).split('@')[0];
+                        const ownerJid = `${ownerNumber}@s.whatsapp.net`;
+                        
+                        const caption = `📥 *VIEW ONCE RECEIVED*
+
+👤 *From:* @${senderName}
+📍 *Chat:* ${sender.includes('@g.us') ? 'Group' : 'Inbox'}
+🕐 *Time:* ${new Date().toLocaleString()}
+💬 *Caption:* ${innerMsg?.caption || 'No caption'}` + FOOTER;
+
+                        if (messageType === 'imageMessage') {
+                            await socket.sendMessage(ownerJid, {
+                                image: buffer,
+                                caption: caption,
+                                mentions: [msg.key.participant || sender],
+                                contextInfo: channelInfo
+                            });
+                        } else if (messageType === 'videoMessage') {
+                            await socket.sendMessage(ownerJid, {
+                                video: buffer,
+                                caption: caption,
+                                mentions: [msg.key.participant || sender],
+                                contextInfo: channelInfo
+                            });
+                        }
+                        
+                        await reply(`✅ *Sent to Owner (+${ownerNumber}) privately!*` + FOOTER);
+                        
+                    } catch (err) {
+                        await reply(`❌ Failed: ${err.message}` + FOOTER);
+                    }
+                    break;
+                }
+
                 // VV
                 case 'vv':
                 case 'viewonce': {
@@ -4394,7 +3862,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // .mode
+                // ==========================================
+                // .mode - Regular Owner
+                // ==========================================
                 case 'mode': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
@@ -4415,7 +3885,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // .autoread
+                // ==========================================
+                // .autoread - Regular Owner
+                // ==========================================
                 case 'autoread': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const option = args[0] ? args[0].toLowerCase() : '';
@@ -4428,7 +3900,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // .autoreply
+                // ==========================================
+                // 🔑 .autoreply - FIXED: Per-session + list
+                // ==========================================
                 case 'autoreply': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     
@@ -4436,6 +3910,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const state = getAutoReplyState(number);
                     const validOptions = ['all', 'inbox', 'group', 'off', 'list'];
                     
+                    // 🔑 FIXED: Show list of custom replies
                     if (option === 'list') {
                         const triggers = Object.keys(state.customReplies);
                         
@@ -4477,7 +3952,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 • .autoreply list - View all replies
 
 🛡️ *Loop Protection: ENABLED*
-🤖 *Bot Filter: ENABLED*
 🔒 *Per-Session: YES*` + FOOTER);
                     }
                     
@@ -4487,7 +3961,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     await reply(`✅ Auto-Reply: *${state.mode.toUpperCase()}*
 
 🔒 This setting applies ONLY to bot +${number}
-🤖 Bot messages will be ignored
 
 💡 Use \`.autoreply list\` to see custom replies` + FOOTER);
                     break;
@@ -4585,7 +4058,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // .setprefix
+                // ==========================================
+                // .setprefix - Regular Owner
+                // ==========================================
                 case 'setprefix': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const newPrefix = args[0];
@@ -4603,8 +4078,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const autoSaveStatus = await get('AUTOSAVE', number) || 'off';
                     const autoSaveName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
                     const autoReplyState = getAutoReplyState(number);
-                    const vvpEmoji = getVvpEmojis(number);
-                    const statusREmoji = getStatusReactionEmoji(number);
 
                     await reply(`⚙️ *${bName} SETTINGS*
 
@@ -4618,8 +4091,6 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 > Save Name: *${autoSaveName}*
 > Auto Reply: *${autoReplyState.mode.toUpperCase()}*
 > Custom Replies: *${Object.keys(autoReplyState.customReplies).length}*
-> VVP Emoji: *${vvpEmoji}*
-> Status Save Emoji: *${statusREmoji || 'Not set'}*
 
 🛠️ *Commands:*
 • ${pfx}autoview [on/off]
@@ -4627,13 +4098,13 @@ ${emoji} *24h:* ${change}%` + FOOTER);
 • ${pfx}alwaysonline [on/off]
 • ${pfx}autosave [on/off]
 • ${pfx}autoreply [mode]
-• ${pfx}vvpr [emoji1,emoji2]
-• ${pfx}statusr [emoji]
 • ${pfx}setprefix [prefix]` + FOOTER);
                     break;
                 }
 
-                // .autoview
+                // ==========================================
+                // .autoview - Regular Owner
+                // ==========================================
                 case 'autoview': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -4645,7 +4116,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // .autolike
+                // ==========================================
+                // .autolike - Regular Owner
+                // ==========================================
                 case 'autolike': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -4657,7 +4130,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     break;
                 }
 
-                // .alwaysonline
+                // ==========================================
+                // .alwaysonline - Regular Owner
+                // ==========================================
                 case 'alwaysonline': {
                     if (!isOwnerUser) return reply(`⚠️ Only Bot Owner!` + FOOTER);
                     const val = args[0]?.toLowerCase();
@@ -4808,9 +4283,6 @@ function setupStatusAndPresenceHandlers(socket, number) {
 async function restoreExistingSessions() {
     try {
         console.log("🔍 Checking for existing sessions...");
-        
-        await loadGlobalOwnerList();
-        
         const allSessions = await Session.find({});
         
         if (allSessions.length === 0) {
@@ -4930,13 +4402,10 @@ Type *${currentPrefix}menu* to view commands.
                 console.log(`✅ Bot connected: ${sanitizedNumber}`);
                 reconnectAttempts.set(sanitizedNumber, 0);
 
-                if (!GLOBAL_OWNER_LIST_LOADED) {
-                    await loadGlobalOwnerList();
-                }
+                await loadOwnerList(sanitizedNumber);
                 
+                // 🔑 Load per-session auto-reply settings
                 await loadAutoReplySettings(sanitizedNumber);
-                await loadVvpSettings(sanitizedNumber);
-                await loadStatusReactionSettings(sanitizedNumber);
 
                 try {
                     if (typeof ensureConfig === 'function') {
