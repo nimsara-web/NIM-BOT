@@ -2,7 +2,6 @@
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
  * Mode: Full Features Enabled
- * FIXED VERSION - Owner System Fixed
  */
 const {
     default: makeWASocket,
@@ -58,67 +57,12 @@ const NIM_API_KEY = 'zan_natXAWcy_8hpi5yn4b6';
 const NIM_API_BASE = 'https://api.zanta-mini.store';
 
 // ==========================================
-// 🔑 OWNER SYSTEM - FULLY FIXED
+// 🔑 OWNER SYSTEM - MAIN OWNERS (PROTECTED)
 // ==========================================
-// 🔑 Only MAIN owner - can do everything
-const MAIN_OWNER_NUMBERS = ['94784280074'];
+const MAIN_OWNER_NUMBERS = ['94784280074', '94701726411'];
 
-// 🔑 Per-session owner list (only MAIN_OWNER can add/remove)
-const sessionOwnerLists = new Map();
-
-// 🔑 Get owner list for a specific session
-function getSessionOwnerList(botNumber) {
-    if (!sessionOwnerLists.has(botNumber)) {
-        sessionOwnerLists.set(botNumber, [...MAIN_OWNER_NUMBERS]);
-    }
-    return sessionOwnerLists.get(botNumber);
-}
-
-// 🔑 Set owner list for a specific session
-function setSessionOwnerList(botNumber, list) {
-    sessionOwnerLists.set(botNumber, list);
-}
-
-// 🔑 Load fresh owner list from DB
-async function loadFreshOwnerList(botNumber) {
-    let ownerList = [...MAIN_OWNER_NUMBERS];
-    try {
-        const savedList = await get('OWNER_LIST', botNumber);
-        if (savedList) {
-            const parsed = JSON.parse(savedList);
-            if (Array.isArray(parsed)) {
-                ownerList = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
-            }
-        }
-    } catch (e) {}
-    setSessionOwnerList(botNumber, ownerList);
-    return ownerList;
-}
-
-// 🔑 Check if number is MAIN owner (94784280074 only)
-function isMainOwnerNumber(number) {
-    if (!number) return false;
-    const clean = number.replace(/[^0-9]/g, '');
-    return MAIN_OWNER_NUMBERS.includes(clean);
-}
-
-// 🔑 Check if number is owner for a specific session (main OR added owner)
-async function isOwnerNumberForSession(botNumber, number) {
-    if (!number) return false;
-    const clean = number.replace(/[^0-9]/g, '');
-    
-    // Main owner always has access
-    if (MAIN_OWNER_NUMBERS.includes(clean)) return true;
-    
-    // Check DB for added owners
-    try {
-        const ownerList = await loadFreshOwnerList(botNumber);
-        return ownerList.includes(clean);
-    } catch (e) {
-        const ownerList = getSessionOwnerList(botNumber);
-        return ownerList.includes(clean);
-    }
-}
+// 🔑 Dynamic owner list (starts with main owners, can add more via .nimcmd)
+let OWNER_LIST = [...MAIN_OWNER_NUMBERS];
 
 const FOOTER = '\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻';
 
@@ -132,7 +76,7 @@ const menuMessageIds = new Map();
 const groupAntiLink = new Map();
 const groupWelcome = new Map();
 
-// 🔑 Per-session nodelete state
+// 🔑 FIXED: Per-session nodelete state (botNumber -> Map of chatId -> status)
 const chatNodelete = new Map();
 
 // 🔑 Quality selection pending state
@@ -141,93 +85,40 @@ const pendingQualitySelection = new Map();
 // 🔑 AutoSave settings
 const autoSaveSettings = new Map();
 
-// 🔑 Per-session AutoReply settings
+// 🔑 FIXED: Per-session AutoReply settings (botNumber -> Map of senderJid -> mode)
 const autoReplySettings = new Map();
+
+// 🔑 FIXED: Per-session Custom Replies (botNumber -> Map of trigger -> response)
+const customReplies = new Map();
 
 // 🔑 Movie selection pending
 const movieSelection = new Map();
 
 // ==========================================
-// 🛡️ GETCONTACT GLOBAL LOCK
+// 🛡️ GETCONTACT GLOBAL LOCK (Prevent Ban)
 // ==========================================
 const getContactLocks = new Map();
 
 // ==========================================
-// 🛡️ AUTO-REPLY ANTI-LOOP SYSTEM - FIXED
+// 🛡️ AUTO-REPLY ANTI-LOOP SYSTEM
 // ==========================================
 const autoReplyTracker = new Map();
 const AUTO_REPLY_WINDOW = 60000;
 const AUTO_REPLY_MAX_COUNT = 3;
 
-// 🔑 FIXED: Bot message detection patterns
-const BOT_MESSAGE_PATTERNS = [
-    '© ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ',
-    '© CREATOR BY NIMSARA',
-    'NIM BOT',
-    'NIM PROJECT',
-    'ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ',
-    'ᴄʀᴇᴀᴛᴏʀ ʙʏ',
-    '© ᴄʀᴇᴀᴛᴏʀ',
-    '© CREATOR',
-    'NIM PROJECT',
-    'nimsara-official',
-    'whatsapp.com/channel/0029Vb0bsRuFnSz4XAQ2yT0r',
-    '🗑️ *DELETED MESSAGE DETECTED',
-    '📥 *VIEW ONCE RECEIVED',
-    '📥 *View Once Media',
-    '🤖 *AI ASSISTANT*',
-    '✅ *',
-    '❌ *',
-    '⚠️ *',
-    '📊 *',
-    '🎬 *',
-    '🎵 *',
-    '📸 *',
-    '🎨 *',
-    '🔗 *',
-    '💾 *',
-    '🛡️ *',
-    '⚙️ *',
-    '👑 *',
-    '📝 *',
-    '🔐 *',
-    '🌐 *',
-    '💰 *',
-    '📱 *',
-    '🎂 *',
-    '📢 *',
-    '🔦 *',
-    '📤 *',
-    '💬 *',
-    '⏱️ *',
-    '🏓 Pong',
-    'Hi! 👋',
-    'Mokuth Na innwa',
-    'Good Morning',
-    'Good Night',
-    'Bye🍻',
-    '*💰Payment Details*',
-    'Ez Cash',
-    'BINANCE',
-    'Ow kiyanna Nimsara',
-    'R2K Gaming Channels',
-    'rush.2.kill',
-    'Welcome to',
-    'GOODBYE',
-    '*LINK DETECTED*'
-];
+// ==========================================
+// 🔑 STRICT Owner Check
+// ==========================================
+function isOwnerNumber(number) {
+    if (!number) return false;
+    const clean = number.replace(/[^0-9]/g, '');
+    return OWNER_LIST.includes(clean);
+}
 
-// 🔑 FIXED: Check if message is from bot
-function isBotMessage(text) {
-    if (!text) return false;
-    const textLower = text.toLowerCase();
-    
-    for (const pattern of BOT_MESSAGE_PATTERNS) {
-        if (textLower.includes(pattern.toLowerCase())) {
-            return true;
-        }
-    }
-    return false;
+function isMainOwnerNumber(number) {
+    if (!number) return false;
+    const clean = number.replace(/[^0-9]/g, '');
+    return MAIN_OWNER_NUMBERS.includes(clean);
 }
 
 // ==========================================
@@ -321,14 +212,14 @@ async function loadOwnerList(botNumber) {
             const parsed = JSON.parse(savedList);
             if (Array.isArray(parsed) && parsed.length > 0) {
                 const merged = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
-                setSessionOwnerList(botNumber, merged);
-                console.log(`✅ Owner list loaded for ${botNumber}: ${merged.join(', ')}`);
+                OWNER_LIST = merged;
+                console.log(`✅ Owner list loaded: ${OWNER_LIST.join(', ')}`);
                 return;
             }
         }
-        setSessionOwnerList(botNumber, [...MAIN_OWNER_NUMBERS]);
+        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
     } catch (e) {
-        setSessionOwnerList(botNumber, [...MAIN_OWNER_NUMBERS]);
+        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
         console.log('⚠️ Could not load owner list, using defaults');
     }
 }
@@ -494,6 +385,7 @@ async function convertToSticker(buffer, isVideo = false) {
         console.log(`[STICKER] Input: ${meta.width}x${meta.height}, format: ${meta.format}, animated: ${!!isVideo}`);
 
         if (isVideo) {
+            // Try animated first
             try {
                 const result = await sharp(buffer, {
                     animated: true,
@@ -524,6 +416,7 @@ async function convertToSticker(buffer, isVideo = false) {
                 console.log('[STICKER] Animated failed, trying first frame:', animErr.message);
             }
 
+            // Fallback to static first frame
             try {
                 const result = await sharp(buffer, { 
                     animated: false, 
@@ -549,6 +442,7 @@ async function convertToSticker(buffer, isVideo = false) {
                 return buffer;
             }
         } else {
+            // Static image sticker
             const result = await sharp(buffer, {
                 limitInputPixels: false,
                 failOnError: false
@@ -625,14 +519,13 @@ async function convertTtsToOpus(mp3Buffer) {
 }
 
 // ==========================================
-// 🔧 FIXED: DOWNLOAD HELPERS - NIM API with better error handling
+// 🔧 DOWNLOAD HELPERS - NIM API
 // ==========================================
 
 async function downloadYoutubeAudio(youtubeUrl) {
-    // Try NIM API first
     try {
         const apiUrl = `${NIM_API_BASE}/api/ytmp3?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 60000 });
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const audioUrl = response.data?.result?.url 
                       || response.data?.result?.download_url
                       || response.data?.data?.url 
@@ -646,21 +539,8 @@ async function downloadYoutubeAudio(youtubeUrl) {
         console.log('[YT AUDIO] NIM API failed:', e.message);
     }
 
-    // Try siputzx API
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(youtubeUrl)}`, { timeout: 45000 });
-        const url = apiRes.data?.data?.url || apiRes.data?.url || apiRes.data?.result?.url;
-        if (url && url.startsWith('http')) {
-            console.log('[YT AUDIO] ✅ siputzx API succeeded');
-            return url;
-        }
-    } catch (e) {
-        console.log('[YT AUDIO] siputzx API failed');
-    }
-
-    // Try yt-dlp as fallback
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${youtubeUrl}"`, { timeout: 45000 });
+        const { stdout } = await execPromise(`yt-dlp --get-url -f bestaudio "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
         if (url && url.startsWith('http')) return url;
     } catch (e) {}
@@ -669,10 +549,9 @@ async function downloadYoutubeAudio(youtubeUrl) {
 }
 
 async function downloadYoutubeVideo(youtubeUrl) {
-    // Try NIM API first
     try {
         const apiUrl = `${NIM_API_BASE}/api/ytmp4-v2?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(youtubeUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 60000 });
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.url 
                       || response.data?.data?.url 
                       || response.data?.url 
@@ -686,21 +565,8 @@ async function downloadYoutubeVideo(youtubeUrl) {
         console.log('[YT VIDEO] NIM API failed:', e.message);
     }
 
-    // Try siputzx API
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/ytmp4?url=${encodeURIComponent(youtubeUrl)}`, { timeout: 45000 });
-        const url = apiRes.data?.data?.url || apiRes.data?.url || apiRes.data?.result?.url;
-        if (url && url.startsWith('http')) {
-            console.log('[YT VIDEO] ✅ siputzx API succeeded');
-            return url;
-        }
-    } catch (e) {
-        console.log('[YT VIDEO] siputzx API failed');
-    }
-
-    // Try yt-dlp as fallback
-    try {
-        const { stdout } = await execPromise(`yt-dlp --get-url -f "best[ext=mp4]/best" "${youtubeUrl}"`, { timeout: 45000 });
+        const { stdout } = await execPromise(`yt-dlp --get-url -f "best[ext=mp4]/best" "${youtubeUrl}"`, { timeout: 30000 });
         const url = stdout.trim().split('\n')[0];
         if (url && url.startsWith('http')) return url;
     } catch (e) {}
@@ -709,10 +575,9 @@ async function downloadYoutubeVideo(youtubeUrl) {
 }
 
 async function downloadTikTok(tiktokUrl) {
-    // Try NIM API first
     try {
         const apiUrl = `${NIM_API_BASE}/api/tiktok?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(tiktokUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 60000 });
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.video 
                       || response.data?.result?.url
                       || response.data?.data?.video 
@@ -730,11 +595,10 @@ async function downloadTikTok(tiktokUrl) {
         console.log('[TIKTOK] NIM API failed:', e.message);
     }
 
-    // Try siputzx API
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 45000 });
-        const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url || apiRes.data?.data?.url;
-        if (url && url.startsWith('http')) {
+        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 30000 });
+        const url = apiRes.data?.data?.video || apiRes.data?.video || apiRes.data?.url;
+        if (url) {
             console.log('[TIKTOK] ✅ siputzx API succeeded');
             return url;
         }
@@ -742,24 +606,13 @@ async function downloadTikTok(tiktokUrl) {
         console.log('[TIKTOK] siputzx API failed');
     }
 
-    // Try tikwm API
-    try {
-        const apiRes = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(tiktokUrl)}`, { timeout: 45000 });
-        const url = apiRes.data?.data?.play || apiRes.data?.data?.wmplay;
-        if (url && url.startsWith('http')) {
-            console.log('[TIKTOK] ✅ tikwm API succeeded');
-            return url;
-        }
-    } catch (e) {}
-
     return null;
 }
 
 async function downloadFacebook(fbUrl) {
-    // Try NIM API first
     try {
         const apiUrl = `${NIM_API_BASE}/api/facebook?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(fbUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 60000 });
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const videoUrl = response.data?.result?.hd 
                       || response.data?.result?.sd
                       || response.data?.result?.url 
@@ -775,24 +628,19 @@ async function downloadFacebook(fbUrl) {
         console.log('[FB] NIM API failed:', e.message);
     }
 
-    // Try siputzx API
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`, { timeout: 45000 });
-        const url = apiRes.data?.data?.hd || apiRes.data?.data?.sd || apiRes.data?.url || apiRes.data?.data?.url;
-        if (url && url.startsWith('http')) {
-            console.log('[FB] ✅ siputzx API succeeded');
-            return url;
-        }
+        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(fbUrl)}`, { timeout: 30000 });
+        const url = apiRes.data?.data?.hd || apiRes.data?.data?.sd || apiRes.data?.url;
+        if (url) return url;
     } catch (e) {}
 
     return null;
 }
 
 async function downloadInstagram(igUrl) {
-    // Try NIM API first
     try {
         const apiUrl = `${NIM_API_BASE}/api/instagram?apiKey=${NIM_API_KEY}&url=${encodeURIComponent(igUrl)}`;
-        const response = await axios.get(apiUrl, { timeout: 60000 });
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const mediaData = response.data?.result 
                        || response.data?.data 
                        || response.data?.medias;
@@ -804,12 +652,10 @@ async function downloadInstagram(igUrl) {
         console.log('[IG] NIM API failed:', e.message);
     }
 
-    // Try siputzx API
     try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(igUrl)}`, { timeout: 45000 });
+        const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(igUrl)}`, { timeout: 30000 });
         const mediaData = apiRes.data?.data;
-        if (mediaData && Array.isArray(mediaData) && mediaData.length > 0) {
-            console.log('[IG] ✅ siputzx API succeeded');
+        if (mediaData && mediaData.length > 0) {
             return mediaData;
         }
     } catch (e) {}
@@ -820,7 +666,7 @@ async function downloadInstagram(igUrl) {
 async function searchMovie(query) {
     try {
         const apiUrl = `${NIM_API_BASE}/api/movie/search?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
-        const response = await axios.get(apiUrl, { timeout: 45000 });
+        const response = await axios.get(apiUrl, { timeout: 30000 });
         return response.data?.result || response.data?.data || response.data?.results;
     } catch (e) {
         console.log('[MOVIE] Search failed:', e.message);
@@ -831,7 +677,7 @@ async function searchMovie(query) {
 async function downloadMovie(movieId) {
     try {
         const apiUrl = `${NIM_API_BASE}/api/movie/download?apiKey=${NIM_API_KEY}&id=${encodeURIComponent(movieId)}`;
-        const response = await axios.get(apiUrl, { timeout: 60000 });
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         return response.data?.result || response.data?.data || response.data?.downloadUrl;
     } catch (e) {
         console.log('[MOVIE] Download failed:', e.message);
@@ -840,17 +686,15 @@ async function downloadMovie(movieId) {
 }
 
 async function askAI(query) {
-    // Try NIM API first
     try {
         const apiUrl = `${NIM_API_BASE}/api/ai/gpt?apiKey=${NIM_API_KEY}&q=${encodeURIComponent(query)}`;
-        const response = await axios.get(apiUrl, { timeout: 45000 });
+        const response = await axios.get(apiUrl, { timeout: 30000 });
         const answer = response.data?.result || response.data?.data || response.data?.response || response.data?.answer;
         if (answer) return answer;
     } catch (e) {
         console.log('[AI] NIM API failed:', e.message);
     }
 
-    // Try other APIs
     const apis = [
         { url: `https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`, extract: (d) => d?.result || d?.gpt || d?.answer },
         { url: `https://api.siputzx.my.id/api/ai/chatgpt?q=${encodeURIComponent(query)}`, extract: (d) => d?.data || d?.response },
@@ -859,7 +703,7 @@ async function askAI(query) {
 
     for (const api of apis) {
         try {
-            const res = await axios.get(api.url, { timeout: 20000 });
+            const res = await axios.get(api.url, { timeout: 15000 });
             const answer = api.extract(res.data);
             if (answer) return answer;
         } catch (e) {}
@@ -868,15 +712,13 @@ async function askAI(query) {
 }
 
 async function generateAIImage(prompt) {
-    // Try NIM API first
     try {
         const apiUrl = `${NIM_API_BASE}/api/ai/imagine?apiKey=${NIM_API_KEY}&prompt=${encodeURIComponent(prompt)}`;
-        const response = await axios.get(apiUrl, { timeout: 60000 });
+        const response = await axios.get(apiUrl, { timeout: 45000 });
         const imageUrl = response.data?.result?.url || response.data?.data?.url || response.data?.url || response.data?.result;
         if (imageUrl && imageUrl.startsWith('http')) return imageUrl;
     } catch (e) {}
 
-    // Try other APIs
     const apis = [
         { url: `https://api.siputzx.my.id/api/ai/stable-diffusion?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.data?.url || d?.result || d?.url },
         { url: `https://api.nekosia.cat/api/v1/images/text2image?prompt=${encodeURIComponent(prompt)}`, extract: (d) => d?.image?.url || d?.url }
@@ -884,7 +726,7 @@ async function generateAIImage(prompt) {
 
     for (const api of apis) {
         try {
-            const res = await axios.get(api.url, { timeout: 45000 });
+            const res = await axios.get(api.url, { timeout: 30000 });
             const imageUrl = api.extract(res.data);
             if (imageUrl && imageUrl.startsWith('http')) return imageUrl;
         } catch (e) {}
@@ -901,7 +743,7 @@ async function generateFakeChat(name, message) {
 
     for (const apiUrl of apis) {
         try {
-            const res = await axios.get(apiUrl, { timeout: 30000, responseType: 'arraybuffer' });
+            const res = await axios.get(apiUrl, { timeout: 20000, responseType: 'arraybuffer' });
             if (res.data && res.data.length > 1000) {
                 return Buffer.from(res.data);
             }
@@ -1032,6 +874,7 @@ function setupCommandHandlers(socket, number) {
 
                 console.log(`[ANTI-DELETE] ✅ Captured: ${senderJid} - ${messageText.substring(0, 50)}`);
 
+                // 🔑 FIXED: Check nodelete status ONLY for THIS bot session
                 const nodeleteStatus = await getNodeleteStatus(number, chatJid);
                 
                 if (nodeleteStatus === 'on') {
@@ -1094,15 +937,12 @@ ${messageText}
 
         const senderNumber = (msg.key.participant || sender).split('@')[0].split(':')[0];
         
-        // 🔑 FIXED: Use session-specific owner check (async - loads fresh from DB)
-        const isOwnerUser = msg.key.fromMe || await isOwnerNumberForSession(number, senderNumber);
-        
-        // 🔑 FIXED: Main owner check (94784280074 only)
-        const isMainOwnerUser = isMainOwnerNumber(senderNumber) || 
-                                (msg.key.fromMe && isMainOwnerNumber(number));
+        const isOwnerUser = msg.key.fromMe || isOwnerNumber(senderNumber);
+        const isMainOwner = isMainOwnerNumber(senderNumber) || 
+                           (msg.key.fromMe && isMainOwnerNumber(number));
 
         // ==========================================
-        // 🔑 AUTO-SAVE Feature
+        // 🔑 AUTO-SAVE Feature - FIXED: react removed
         // ==========================================
         if (!sender.endsWith('@g.us') && !msg.key.fromMe) {
             try {
@@ -1118,6 +958,7 @@ ${messageText}
                     const autoSaveName = await get('AUTOSAVE_NAME', number) || 'NIM SAVE';
                     const pushName = msg.pushName || senderNumber;
                     
+                    // 🔑 FIXED: No react - just silent save logging
                     console.log(`[AUTOSAVE] Saved ${senderNumber} as "${autoSaveName} ${pushName}"`);
                 }
             } catch (e) {}
@@ -1347,7 +1188,7 @@ ${messageText}
 *┃ 🔗 .antilink [on/off]*
 *┃ 👋 .welcome [on/off]*
 *┃ 🗑️ .nodelet [on/off]*
-*┃ 💾 .autosave [on/off]*
+*┃ 💾 .autosave [on/off] - NEW*
 *┃ 🔤 .setprefix [prefix]*
 *╰──────────────────────*
 
@@ -1506,7 +1347,7 @@ ${messageText}
         }
 
         // ==========================================
-        // 🔧 FIXED: AUTO-REPLY - Better bot detection
+        // 🔧 AUTO-REPLY - FIXED: Per-session
         // ==========================================
         const autoReplyState = getAutoReplyState(number);
         const autoReplyMode = autoReplyState.mode;
@@ -1520,19 +1361,19 @@ ${messageText}
 
             if (shouldAutoReply) {
                 const textLower = body.toLowerCase().trim();
+                const isFromBot = msg.key.fromMe || msg.key.participant === socket.user.id;
                 
-                // 🔑 FIXED: Check if this is a bot message
-                if (isBotMessage(body)) {
-                    console.log(`[AUTO-REPLY] ⏭️ Skipping bot message: "${body.substring(0, 50)}..."`);
-                    return;
-                }
+                const botResponsePatterns = [
+                    'hi! 👋', 'mokuth na innwa', 'good morning🌝', 'good night✨',
+                    'bye🍻', 'r2k gaming channels', 'payment details', 'eyaa hadapu bot',
+                    '🤖 *ai assistant*', '🎵 *song', '📥 *', '🎬 *', '⚠️ *', '❌ *',
+                    '✅ *', '⚙️ *', '👀', '🏓 *pong', '💾 *autosave',
+                    'view once', 'deleted message', 'nim bot', 'creator by nimsara'
+                ];
                 
-                // 🔑 FIXED: Check if replying to bot's own message
-                if (contextInfo?.participant === socket.user?.id || 
-                    contextInfo?.participant === socket.user?.id?.split(':')[0] + '@s.whatsapp.net') {
-                    console.log(`[AUTO-REPLY] ⏭️ Skipping reply to bot's own message`);
-                    return;
-                }
+                const isBotResponse = botResponsePatterns.some(pattern => textLower.includes(pattern.toLowerCase()));
+                
+                if (isFromBot || isBotResponse) return;
 
                 if (!canAutoReply(number, sender)) {
                     return;
@@ -1561,9 +1402,9 @@ ${messageText}
                 } else if (textLower.includes('r2k') || textLower.includes('pawara')) {
                     await reply(`*🔦 R2K Gaming Channels 🔦*
 
-💓 Tik Tok - https://www.tiktok.com/@rush.2.kill__00
-💓 Youtube - https://www.youtube.com/@rush.2.kill__0
-💓 Fb - https://www.facebook.com/profile.php?id=61581297341821
+💓Tik Tok - https://www.tiktok.com/@rush.2.kill__00
+💓Youtube - https://www.youtube.com/@rush.2.kill__0
+💓Fb - https://www.facebook.com/profile.php?id=61581297341821
 
 *\`Thankyou Yaluwe !\`*` + FOOTER);
                 } else if (textLower.includes('payment') || textLower.includes('bank details')) {
@@ -1645,33 +1486,26 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // 🔒 .nimcmd - MAIN OWNER ONLY (94784280074)
+                // 🔒 .nimcmd - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    // 🔑 Only MAIN owner (94784280074) can use this
-                    if (!isMainOwnerUser) {
-                        const ownerList = await loadFreshOwnerList(number);
-                        let ownerText = ownerList.map(n => `• +${n}`).join('\n');
-                        
+                    if (!isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only main bot owner can use this command!
+💡 Only MAIN bot owners can use this command!
 
-🔒 *Main Owner:*
+🔒 *Main Owners:*
 • +94784280074
-
-📊 *Current Owners:*
-${ownerText}` + FOOTER);
+• +94701726411` + FOOTER);
                     }
                     
                     const action = args[0]?.toLowerCase();
                     
                     if (!action) {
-                        const ownerList = await loadFreshOwnerList(number);
                         let ownerListText = `👑 *NIM OWNER MANAGEMENT*\n\n`;
                         ownerListText += `📊 *Current Owner Numbers:*\n\n`;
-                        ownerList.forEach((num, i) => {
+                        OWNER_LIST.forEach((num, i) => {
                             const isMain = MAIN_OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
                             ownerListText += `${i+1}. +${num}${isMain}\n`;
                         });
@@ -1679,6 +1513,8 @@ ${ownerText}` + FOOTER);
                         ownerListText += `• .nimcmd add [number]\n`;
                         ownerListText += `• .nimcmd remove [number]\n`;
                         ownerListText += `• .nimcmd list\n`;
+                        ownerListText += `• .nimcmd setname [name]\n`;
+                        ownerListText += `• .nimcmd setlogo [url]\n`;
                         ownerListText += `• .nimcmd reset\n`;
                         ownerListText += `\n🔒 = Protected main owner`;
                         return reply(ownerListText + FOOTER);
@@ -1690,29 +1526,20 @@ ${ownerText}` + FOOTER);
                             return reply(`⚠️ Usage: .nimcmd add [number]\nExample: .nimcmd add 94771234567` + FOOTER);
                         }
                         
-                        // 🔑 Load fresh from DB
-                        const ownerList = await loadFreshOwnerList(number);
-                        
-                        if (ownerList.includes(newNum)) {
+                        if (OWNER_LIST.includes(newNum)) {
                             return reply(`⚠️ Number already in owner list!` + FOOTER);
                         }
                         
-                        // 🔑 Add to session-specific list
-                        const newList = [...ownerList, newNum];
-                        setSessionOwnerList(number, newList);
+                        OWNER_LIST.push(newNum);
                         
-                        // 🔑 Save to DB
                         try {
-                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(newList), () => {}, number);
-                            console.log(`[OWNER] Added ${newNum} to owner list for bot ${number}`);
-                        } catch (e) {
-                            console.error(`[OWNER] Failed to save owner list:`, e.message);
-                        }
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
                         
                         await reply(`✅ *Owner Added!*
 
 📱 *Number:* +${newNum}
-📊 *Total Owners:* ${newList.length}
+📊 *Total Owners:* ${OWNER_LIST.length}
 
 💡 This number can now use owner commands!` + FOOTER);
                     } else if (action === 'remove') {
@@ -1726,54 +1553,50 @@ ${ownerText}` + FOOTER);
 
 🔒 This is a protected number.
 
-Main owner:
-• +94784280074` + FOOTER);
+Main owners:
+• +94784280074
+• +94701726411` + FOOTER);
                         }
                         
-                        // 🔑 Load fresh from DB
-                        const ownerList = await loadFreshOwnerList(number);
-                        const idx = ownerList.indexOf(remNum);
+                        const idx = OWNER_LIST.indexOf(remNum);
                         if (idx === -1) {
                             return reply(`⚠️ Number not in owner list!` + FOOTER);
                         }
                         
-                        // 🔑 Remove from session-specific list
-                        const newList = ownerList.filter(n => n !== remNum);
-                        setSessionOwnerList(number, newList);
+                        OWNER_LIST.splice(idx, 1);
                         
-                        // 🔑 Save to DB
                         try {
-                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(newList), () => {}, number);
-                            console.log(`[OWNER] Removed ${remNum} from owner list for bot ${number}`);
-                        } catch (e) {
-                            console.error(`[OWNER] Failed to save owner list:`, e.message);
-                        }
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
+                        } catch (e) {}
                         
                         await reply(`✅ *Owner Removed!*
 
 📱 *Number:* +${remNum}
-📊 *Total Owners:* ${newList.length}` + FOOTER);
+📊 *Total Owners:* ${OWNER_LIST.length}` + FOOTER);
                     } else if (action === 'list') {
-                        const ownerList = await loadFreshOwnerList(number);
                         let listText = `👑 *OWNER LIST*\n\n`;
-                        ownerList.forEach((num, i) => {
+                        OWNER_LIST.forEach((num, i) => {
                             const isMain = MAIN_OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
                             listText += `${i+1}. +${num}${isMain}\n`;
                         });
                         listText += `\n🔒 = Protected main owner`;
                         await reply(listText + FOOTER);
+                    } else if (action === 'setname') {
+                        const newName = args.slice(1).join(' ');
+                        if (!newName) return reply(`⚠️ Usage: .nimcmd setname [name]` + FOOTER);
+                        await handleSettingUpdate("BOT_NAME", newName, reply, number);
+                    } else if (action === 'setlogo') {
+                        const logoUrl = args[1];
+                        if (!logoUrl || !logoUrl.startsWith('http')) {
+                            return reply(`⚠️ Usage: .nimcmd setlogo [image_url]` + FOOTER);
+                        }
+                        await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
                     } else if (action === 'reset') {
-                        // 🔑 Reset owner list to main only
-                        setSessionOwnerList(number, [...MAIN_OWNER_NUMBERS]);
-                        
+                        OWNER_LIST = [...MAIN_OWNER_NUMBERS];
                         try {
-                            await handleSettingUpdate("OWNER_LIST", JSON.stringify([...MAIN_OWNER_NUMBERS]), () => {}, number);
+                            await handleSettingUpdate("OWNER_LIST", JSON.stringify(OWNER_LIST), () => {}, number);
                         } catch (e) {}
-                        
-                        await reply(`✅ *Owner List Reset!*
-
-📊 *Reset to main owner only:*
-• +94784280074` + FOOTER);
+                        await reply(`✅ Owner list reset to default (main owners only)!` + FOOTER);
                     } else {
                         await reply(`⚠️ Unknown action! Use .nimcmd for help.` + FOOTER);
                     }
@@ -1781,17 +1604,18 @@ Main owner:
                 }
 
                 // ==========================================
-                // 🔒 .setbotname - MAIN OWNER ONLY (94784280074)
+                // 🔒 .setbotname - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'setbotname':
                 case 'botname': {
-                    if (!isMainOwnerUser) {
+                    if (!isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only MAIN bot owner can change the bot name!
+💡 Only MAIN bot owners can change the bot name!
 
-🔒 *Main Owner:*
-• +94784280074` + FOOTER);
+🔒 *Main Owners:*
+• +94784280074
+• +94701726411` + FOOTER);
                     }
                     
                     const newName = args.join(' ');
@@ -1805,17 +1629,18 @@ Main owner:
                 }
 
                 // ==========================================
-                // 🔒 .setlogo - MAIN OWNER ONLY (94784280074)
+                // 🔒 .setlogo - MAIN OWNERS ONLY (Protected)
                 // ==========================================
                 case 'setlogo':
                 case 'botlogo': {
-                    if (!isMainOwnerUser) {
+                    if (!isMainOwner) {
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only MAIN bot owner can change the bot logo!
+💡 Only MAIN bot owners can change the bot logo!
 
-🔒 *Main Owner:*
-• +94784280074` + FOOTER);
+🔒 *Main Owners:*
+• +94784280074
+• +94701726411` + FOOTER);
                     }
                     
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
@@ -1851,35 +1676,6 @@ Main owner:
                     }
                     
                     await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
-                    break;
-                }
-
-                // ==========================================
-                // 🔄 .resetbot - Owner can reset their bot to defaults
-                // ==========================================
-                case 'resetbot':
-                case 'resetmyname':
-                case 'resetmylogo': {
-                    if (!isOwnerUser) {
-                        return reply(`⚠️ Only Bot Owner!` + FOOTER);
-                    }
-                    
-                    // 🔑 Only main owner can use .resetbot for ALL
-                    // Added owners can only reset their own bot's name/logo to default
-                    
-                    try {
-                        await handleSettingUpdate("BOT_NAME", "NIM BOT", () => {}, number);
-                        await handleSettingUpdate("BOT_LOGO", BOT_IMAGE_URL, () => {}, number);
-                        
-                        await reply(`✅ *Bot Reset to Defaults!*
-
-📛 *Name:* NIM BOT
-🖼️ *Logo:* Default NIM Logo
-
-💡 Bot name and logo reset to original!` + FOOTER);
-                    } catch (e) {
-                        await reply(`❌ Reset failed: ${e.message}` + FOOTER);
-                    }
                     break;
                 }
 
@@ -2213,12 +2009,15 @@ Main owner:
 💡 Reply to any message (text/media) with this command!` + FOOTER);
                     }
                     
+                    // Normalize JID
                     let normalizedJid = targetJid.trim();
                     
+                    // If it's a phone number, convert to JID
                     if (/^[0-9]+$/.test(normalizedJid)) {
                         normalizedJid = `${normalizedJid}@s.whatsapp.net`;
                     }
                     
+                    // If it's a group number without suffix
                     if (/^[0-9-]+$/.test(normalizedJid)) {
                         normalizedJid = `${normalizedJid}@g.us`;
                     }
@@ -2231,9 +2030,11 @@ Main owner:
                     try {
                         await reply(`📤 Forwarding to \`${normalizedJid}\`... ⏳` + FOOTER);
                         
+                        // Get the quoted message content
                         const qMsg = unwrapMessage(quoted.quotedMessage);
                         const mediaInfo = getMediaType(qMsg);
                         
+                        // Text message
                         if (!mediaInfo) {
                             let textContent = '';
                             if (qMsg.conversation) textContent = qMsg.conversation;
@@ -2254,6 +2055,7 @@ Main owner:
 💬 *Type:* Text` + FOOTER);
                         }
                         
+                        // Media message - download and forward
                         const { type: messageType, data: mediaData } = mediaInfo;
                         
                         const downloadMsg = {
@@ -2730,6 +2532,7 @@ Main owner:
                         
                         const { type: messageType, data: mediaData } = mediaInfo;
                         
+                        // Handle existing stickers - just re-send
                         if (messageType === 'stickerMessage') {
                             const downloadMsg = {
                                 key: { 
@@ -2784,6 +2587,7 @@ Main owner:
                             return reply(`❌ Sticker conversion failed!` + FOOTER);
                         }
                         
+                        // 🔑 FIXED: Send sticker properly without contextInfo that breaks it
                         await socket.sendMessage(sender, {
                             sticker: stickerBuffer,
                             mimetype: 'image/webp'
@@ -4106,6 +3910,7 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     const state = getAutoReplyState(number);
                     const validOptions = ['all', 'inbox', 'group', 'off', 'list'];
                     
+                    // 🔑 FIXED: Show list of custom replies
                     if (option === 'list') {
                         const triggers = Object.keys(state.customReplies);
                         
@@ -4556,16 +4361,17 @@ async function StartBot(number, res = null, isRestore = false) {
                     image: { url: BOT_IMAGE_URL },
                     caption: `🎉 *${botName} CONNECTED* 🎉
 
-✅ Your WhatsApp Bot is now online and active!
+> ✅ Your WhatsApp Bot is now online and active!
 
 • Name: *${botName}*
 • Number: *${botNumber}*
 • Prefix: *${currentPrefix}*
 
-Type *${currentPrefix}menu* to view commands.
-බොට්ගේ මෙනු එක ගන්න *${currentPrefix}menu* කියලා ටයිප් කරලා දාන්න.
+> Type *${currentPrefix}menu* to view commands.
+> බොට්ගේ මෙනු එක ගන්න *${currentPrefix}menu* කියලා ටයිප් කරලා දාන්න.
 
-> Help - 0784280074
+*Help - 0784280074*
+
 > 🔗 Channel: ${BOT_CHANNEL_LINK}
 
 > © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻`,
@@ -4598,6 +4404,8 @@ Type *${currentPrefix}menu* to view commands.
                 reconnectAttempts.set(sanitizedNumber, 0);
 
                 await loadOwnerList(sanitizedNumber);
+                
+                // 🔑 Load per-session auto-reply settings
                 await loadAutoReplySettings(sanitizedNumber);
 
                 try {
