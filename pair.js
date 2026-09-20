@@ -2,7 +2,7 @@
  * Project: NIM BOT - Public Multi-User Pairing Module
  * Creator: Nimsara
  * Mode: Full Features Enabled
- * FIXED VERSION - All bugs resolved
+ * FIXED VERSION - Owner System Fixed
  */
 const {
     default: makeWASocket,
@@ -58,14 +58,15 @@ const NIM_API_KEY = 'zan_natXAWcy_8hpi5yn4b6';
 const NIM_API_BASE = 'https://api.zanta-mini.store';
 
 // ==========================================
-// 🔑 OWNER SYSTEM - FIXED
+// 🔑 OWNER SYSTEM - FULLY FIXED
 // ==========================================
-const MAIN_OWNER_NUMBERS = ['94784280074', '94701726411'];
+// 🔑 Only MAIN owner - can do everything
+const MAIN_OWNER_NUMBERS = ['94784280074'];
 
-// 🔑 Dynamic owner list - stored per session
+// 🔑 Per-session owner list (only MAIN_OWNER can add/remove)
 const sessionOwnerLists = new Map();
 
-// 🔑 FIXED: Get owner list for a specific session
+// 🔑 Get owner list for a specific session
 function getSessionOwnerList(botNumber) {
     if (!sessionOwnerLists.has(botNumber)) {
         sessionOwnerLists.set(botNumber, [...MAIN_OWNER_NUMBERS]);
@@ -73,39 +74,12 @@ function getSessionOwnerList(botNumber) {
     return sessionOwnerLists.get(botNumber);
 }
 
-// 🔑 FIXED: Set owner list for a specific session
+// 🔑 Set owner list for a specific session
 function setSessionOwnerList(botNumber, list) {
     sessionOwnerLists.set(botNumber, list);
 }
 
-// 🔑 FIXED: Check if number is owner for a specific session - NOW LOADS FROM DB EVERY TIME
-async function isOwnerNumberForSession(botNumber, number) {
-    if (!number) return false;
-    const clean = number.replace(/[^0-9]/g, '');
-    
-    // Always check main owners first (instant)
-    if (MAIN_OWNER_NUMBERS.includes(clean)) return true;
-    
-    // 🔑 FIXED: Load fresh from DB to get latest additions
-    try {
-        const savedList = await get('OWNER_LIST', botNumber);
-        if (savedList) {
-            const parsed = JSON.parse(savedList);
-            if (Array.isArray(parsed) && parsed.includes(clean)) {
-                // Update cache in background
-                const merged = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
-                setSessionOwnerList(botNumber, merged);
-                return true;
-            }
-        }
-    } catch (e) {}
-    
-    // Fallback to cache
-    const ownerList = getSessionOwnerList(botNumber);
-    return ownerList.includes(clean);
-}
-
-// 🔑 FIXED: Load owner list from DB (fresh)
+// 🔑 Load fresh owner list from DB
 async function loadFreshOwnerList(botNumber) {
     let ownerList = [...MAIN_OWNER_NUMBERS];
     try {
@@ -121,10 +95,29 @@ async function loadFreshOwnerList(botNumber) {
     return ownerList;
 }
 
+// 🔑 Check if number is MAIN owner (94784280074 only)
 function isMainOwnerNumber(number) {
     if (!number) return false;
     const clean = number.replace(/[^0-9]/g, '');
     return MAIN_OWNER_NUMBERS.includes(clean);
+}
+
+// 🔑 Check if number is owner for a specific session (main OR added owner)
+async function isOwnerNumberForSession(botNumber, number) {
+    if (!number) return false;
+    const clean = number.replace(/[^0-9]/g, '');
+    
+    // Main owner always has access
+    if (MAIN_OWNER_NUMBERS.includes(clean)) return true;
+    
+    // Check DB for added owners
+    try {
+        const ownerList = await loadFreshOwnerList(botNumber);
+        return ownerList.includes(clean);
+    } catch (e) {
+        const ownerList = getSessionOwnerList(botNumber);
+        return ownerList.includes(clean);
+    }
 }
 
 const FOOTER = '\n\n> © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻';
@@ -319,7 +312,7 @@ async function saveAutoReplySettings(botNumber) {
 }
 
 // ==========================================
-// 🔑 FIXED: Load Owner List from DB
+// 🔑 Load Owner List from DB
 // ==========================================
 async function loadOwnerList(botNumber) {
     try {
@@ -327,7 +320,6 @@ async function loadOwnerList(botNumber) {
         if (savedList) {
             const parsed = JSON.parse(savedList);
             if (Array.isArray(parsed) && parsed.length > 0) {
-                // FIXED: Merge with main owners but ensure main owners are always included
                 const merged = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
                 setSessionOwnerList(botNumber, merged);
                 console.log(`✅ Owner list loaded for ${botNumber}: ${merged.join(', ')}`);
@@ -1104,8 +1096,10 @@ ${messageText}
         
         // 🔑 FIXED: Use session-specific owner check (async - loads fresh from DB)
         const isOwnerUser = msg.key.fromMe || await isOwnerNumberForSession(number, senderNumber);
-        const isMainOwner = isMainOwnerNumber(senderNumber) || 
-                           (msg.key.fromMe && isMainOwnerNumber(number));
+        
+        // 🔑 FIXED: Main owner check (94784280074 only)
+        const isMainOwnerUser = isMainOwnerNumber(senderNumber) || 
+                                (msg.key.fromMe && isMainOwnerNumber(number));
 
         // ==========================================
         // 🔑 AUTO-SAVE Feature
@@ -1651,24 +1645,23 @@ id - 842717887
             switch (command) {
 
                 // ==========================================
-                // 🔒 .nimcmd - FIXED: Complete owner management
+                // 🔒 .nimcmd - MAIN OWNER ONLY (94784280074)
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    // 🔑 FIXED: Now checks BOTH main owners AND session owners
-                    const isMainOwnerCheck = isMainOwnerNumber(senderNumber) || 
-                                            (msg.key.fromMe && isMainOwnerNumber(number)) ||
-                                            await isOwnerNumberForSession(number, senderNumber);
-                    
-                    if (!isMainOwnerCheck) {
+                    // 🔑 Only MAIN owner (94784280074) can use this
+                    if (!isMainOwnerUser) {
                         const ownerList = await loadFreshOwnerList(number);
                         let ownerText = ownerList.map(n => `• +${n}`).join('\n');
                         
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only bot owners can use this command!
+💡 Only main bot owner can use this command!
 
-🔒 *Owners:*
+🔒 *Main Owner:*
+• +94784280074
+
+📊 *Current Owners:*
 ${ownerText}` + FOOTER);
                     }
                     
@@ -1686,8 +1679,6 @@ ${ownerText}` + FOOTER);
                         ownerListText += `• .nimcmd add [number]\n`;
                         ownerListText += `• .nimcmd remove [number]\n`;
                         ownerListText += `• .nimcmd list\n`;
-                        ownerListText += `• .nimcmd setname [name]\n`;
-                        ownerListText += `• .nimcmd setlogo [url]\n`;
                         ownerListText += `• .nimcmd reset\n`;
                         ownerListText += `\n🔒 = Protected main owner`;
                         return reply(ownerListText + FOOTER);
@@ -1699,18 +1690,18 @@ ${ownerText}` + FOOTER);
                             return reply(`⚠️ Usage: .nimcmd add [number]\nExample: .nimcmd add 94771234567` + FOOTER);
                         }
                         
-                        // 🔑 FIXED: Load fresh from DB
+                        // 🔑 Load fresh from DB
                         const ownerList = await loadFreshOwnerList(number);
                         
                         if (ownerList.includes(newNum)) {
                             return reply(`⚠️ Number already in owner list!` + FOOTER);
                         }
                         
-                        // 🔑 FIXED: Add to session-specific list
+                        // 🔑 Add to session-specific list
                         const newList = [...ownerList, newNum];
                         setSessionOwnerList(number, newList);
                         
-                        // 🔑 FIXED: Save to DB properly
+                        // 🔑 Save to DB
                         try {
                             await handleSettingUpdate("OWNER_LIST", JSON.stringify(newList), () => {}, number);
                             console.log(`[OWNER] Added ${newNum} to owner list for bot ${number}`);
@@ -1735,23 +1726,22 @@ ${ownerText}` + FOOTER);
 
 🔒 This is a protected number.
 
-Main owners:
-• +94784280074
-• +94701726411` + FOOTER);
+Main owner:
+• +94784280074` + FOOTER);
                         }
                         
-                        // 🔑 FIXED: Load fresh from DB
+                        // 🔑 Load fresh from DB
                         const ownerList = await loadFreshOwnerList(number);
                         const idx = ownerList.indexOf(remNum);
                         if (idx === -1) {
                             return reply(`⚠️ Number not in owner list!` + FOOTER);
                         }
                         
-                        // 🔑 FIXED: Remove from session-specific list
+                        // 🔑 Remove from session-specific list
                         const newList = ownerList.filter(n => n !== remNum);
                         setSessionOwnerList(number, newList);
                         
-                        // 🔑 FIXED: Save to DB properly
+                        // 🔑 Save to DB
                         try {
                             await handleSettingUpdate("OWNER_LIST", JSON.stringify(newList), () => {}, number);
                             console.log(`[OWNER] Removed ${remNum} from owner list for bot ${number}`);
@@ -1772,18 +1762,8 @@ Main owners:
                         });
                         listText += `\n🔒 = Protected main owner`;
                         await reply(listText + FOOTER);
-                    } else if (action === 'setname') {
-                        const newName = args.slice(1).join(' ');
-                        if (!newName) return reply(`⚠️ Usage: .nimcmd setname [name]` + FOOTER);
-                        await handleSettingUpdate("BOT_NAME", newName, reply, number);
-                    } else if (action === 'setlogo') {
-                        const logoUrl = args[1];
-                        if (!logoUrl || !logoUrl.startsWith('http')) {
-                            return reply(`⚠️ Usage: .nimcmd setlogo [image_url]` + FOOTER);
-                        }
-                        await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
                     } else if (action === 'reset') {
-                        // 🔑 FIXED: Reset owner list to default (main owners only)
+                        // 🔑 Reset owner list to main only
                         setSessionOwnerList(number, [...MAIN_OWNER_NUMBERS]);
                         
                         try {
@@ -1792,20 +1772,8 @@ Main owners:
                         
                         await reply(`✅ *Owner List Reset!*
 
-📊 *Reset to main owners only:*
-• +94784280074
-• +94701726411
-
-💡 This also resets bot name and logo to defaults!` + FOOTER);
-                        
-                        // 🔑 FIXED: Also reset bot name and logo
-                        try {
-                            await handleSettingUpdate("BOT_NAME", "NIM BOT", () => {}, number);
-                            await handleSettingUpdate("BOT_LOGO", BOT_IMAGE_URL, () => {}, number);
-                            console.log(`[RESET] Bot name and logo reset to defaults for ${number}`);
-                        } catch (e) {
-                            console.error(`[RESET] Failed to reset bot name/logo:`, e.message);
-                        }
+📊 *Reset to main owner only:*
+• +94784280074` + FOOTER);
                     } else {
                         await reply(`⚠️ Unknown action! Use .nimcmd for help.` + FOOTER);
                     }
@@ -1813,21 +1781,17 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔒 .setbotname - MAIN OWNERS ONLY
+                // 🔒 .setbotname - MAIN OWNER ONLY (94784280074)
                 // ==========================================
                 case 'setbotname':
                 case 'botname': {
-                    const isMainOwnerCheck = isMainOwnerNumber(senderNumber) || 
-                                            (msg.key.fromMe && isMainOwnerNumber(number));
-                    
-                    if (!isMainOwnerCheck) {
+                    if (!isMainOwnerUser) {
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only MAIN bot owners can change the bot name!
+💡 Only MAIN bot owner can change the bot name!
 
-🔒 *Main Owners:*
-• +94784280074
-• +94701726411` + FOOTER);
+🔒 *Main Owner:*
+• +94784280074` + FOOTER);
                     }
                     
                     const newName = args.join(' ');
@@ -1841,21 +1805,17 @@ Main owners:
                 }
 
                 // ==========================================
-                // 🔒 .setlogo - MAIN OWNERS ONLY
+                // 🔒 .setlogo - MAIN OWNER ONLY (94784280074)
                 // ==========================================
                 case 'setlogo':
                 case 'botlogo': {
-                    const isMainOwnerCheck = isMainOwnerNumber(senderNumber) || 
-                                            (msg.key.fromMe && isMainOwnerNumber(number));
-                    
-                    if (!isMainOwnerCheck) {
+                    if (!isMainOwnerUser) {
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only MAIN bot owners can change the bot logo!
+💡 Only MAIN bot owner can change the bot logo!
 
-🔒 *Main Owners:*
-• +94784280074
-• +94701726411` + FOOTER);
+🔒 *Main Owner:*
+• +94784280074` + FOOTER);
                     }
                     
                     const quoted = msg.message?.extendedTextMessage?.contextInfo;
@@ -1891,6 +1851,35 @@ Main owners:
                     }
                     
                     await handleSettingUpdate("BOT_LOGO", logoUrl, reply, number);
+                    break;
+                }
+
+                // ==========================================
+                // 🔄 .resetbot - Owner can reset their bot to defaults
+                // ==========================================
+                case 'resetbot':
+                case 'resetmyname':
+                case 'resetmylogo': {
+                    if (!isOwnerUser) {
+                        return reply(`⚠️ Only Bot Owner!` + FOOTER);
+                    }
+                    
+                    // 🔑 Only main owner can use .resetbot for ALL
+                    // Added owners can only reset their own bot's name/logo to default
+                    
+                    try {
+                        await handleSettingUpdate("BOT_NAME", "NIM BOT", () => {}, number);
+                        await handleSettingUpdate("BOT_LOGO", BOT_IMAGE_URL, () => {}, number);
+                        
+                        await reply(`✅ *Bot Reset to Defaults!*
+
+📛 *Name:* NIM BOT
+🖼️ *Logo:* Default NIM Logo
+
+💡 Bot name and logo reset to original!` + FOOTER);
+                    } catch (e) {
+                        await reply(`❌ Reset failed: ${e.message}` + FOOTER);
+                    }
                     break;
                 }
 
