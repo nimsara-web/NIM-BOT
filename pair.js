@@ -105,6 +105,22 @@ async function isOwnerNumberForSession(botNumber, number) {
     return ownerList.includes(clean);
 }
 
+// 🔑 FIXED: Load owner list from DB (fresh)
+async function loadFreshOwnerList(botNumber) {
+    let ownerList = [...MAIN_OWNER_NUMBERS];
+    try {
+        const savedList = await get('OWNER_LIST', botNumber);
+        if (savedList) {
+            const parsed = JSON.parse(savedList);
+            if (Array.isArray(parsed)) {
+                ownerList = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
+            }
+        }
+    } catch (e) {}
+    setSessionOwnerList(botNumber, ownerList);
+    return ownerList;
+}
+
 function isMainOwnerNumber(number) {
     if (!number) return false;
     const clean = number.replace(/[^0-9]/g, '');
@@ -1639,26 +1655,27 @@ id - 842717887
                 // ==========================================
                 case 'nimcmd':
                 case 'ownercmd': {
-                    // 🔑 FIXED: Better main owner check
+                    // 🔑 FIXED: Now checks BOTH main owners AND session owners
                     const isMainOwnerCheck = isMainOwnerNumber(senderNumber) || 
-                                            (msg.key.fromMe && isMainOwnerNumber(number));
+                                            (msg.key.fromMe && isMainOwnerNumber(number)) ||
+                                            await isOwnerNumberForSession(number, senderNumber);
                     
                     if (!isMainOwnerCheck) {
-                        const ownerList = getSessionOwnerList(number);
+                        const ownerList = await loadFreshOwnerList(number);
                         let ownerText = ownerList.map(n => `• +${n}`).join('\n');
                         
                         return reply(`⚠️ *Access Denied!*
 
-💡 Only MAIN bot owners can use this command!
+💡 Only bot owners can use this command!
 
-🔒 *Main Owners:*
+🔒 *Owners:*
 ${ownerText}` + FOOTER);
                     }
                     
                     const action = args[0]?.toLowerCase();
                     
                     if (!action) {
-                        const ownerList = getSessionOwnerList(number);
+                        const ownerList = await loadFreshOwnerList(number);
                         let ownerListText = `👑 *NIM OWNER MANAGEMENT*\n\n`;
                         ownerListText += `📊 *Current Owner Numbers:*\n\n`;
                         ownerList.forEach((num, i) => {
@@ -1682,7 +1699,8 @@ ${ownerText}` + FOOTER);
                             return reply(`⚠️ Usage: .nimcmd add [number]\nExample: .nimcmd add 94771234567` + FOOTER);
                         }
                         
-                        const ownerList = getSessionOwnerList(number);
+                        // 🔑 FIXED: Load fresh from DB
+                        const ownerList = await loadFreshOwnerList(number);
                         
                         if (ownerList.includes(newNum)) {
                             return reply(`⚠️ Number already in owner list!` + FOOTER);
@@ -1722,7 +1740,8 @@ Main owners:
 • +94701726411` + FOOTER);
                         }
                         
-                        const ownerList = getSessionOwnerList(number);
+                        // 🔑 FIXED: Load fresh from DB
+                        const ownerList = await loadFreshOwnerList(number);
                         const idx = ownerList.indexOf(remNum);
                         if (idx === -1) {
                             return reply(`⚠️ Number not in owner list!` + FOOTER);
@@ -1745,7 +1764,7 @@ Main owners:
 📱 *Number:* +${remNum}
 📊 *Total Owners:* ${newList.length}` + FOOTER);
                     } else if (action === 'list') {
-                        const ownerList = getSessionOwnerList(number);
+                        const ownerList = await loadFreshOwnerList(number);
                         let listText = `👑 *OWNER LIST*\n\n`;
                         ownerList.forEach((num, i) => {
                             const isMain = MAIN_OWNER_NUMBERS.includes(num) ? ' 🔒' : '';
@@ -4558,7 +4577,6 @@ Type *${currentPrefix}menu* to view commands.
 බොට්ගේ මෙනු එක ගන්න *${currentPrefix}menu* කියලා ටයිප් කරලා දාන්න.
 
 > Help - 0784280074
-
 > 🔗 Channel: ${BOT_CHANNEL_LINK}
 
 > © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻`,
