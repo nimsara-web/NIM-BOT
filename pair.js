@@ -73,8 +73,6 @@ const deletedMessages = new Map();
 const reconnectAttempts = new Map();
 const userCategoryState = new Map();
 const menuMessageIds = new Map();
-// 🔑 FIX: Track ALL menu message IDs per bot session (to prevent cross-bot replies)
-const botMenuMessageIds = new Map(); // botNumber -> Set of message IDs
 const groupAntiLink = new Map();
 const groupWelcome = new Map();
 
@@ -817,8 +815,6 @@ async function useMongoDBAuthState(number) {
     return { state, saveCreds: enhancedSaveCreds };
 }
 
-
-
 // ==========================================
 // Setup Command Handlers
 // ==========================================
@@ -1130,35 +1126,32 @@ ${messageText}
             }
         }
 
-        // ==========================================
-        // MENU REPLY HANDLER - 🔑 FIXED: Cross-bot protection
-        // ==========================================
-        // 🔑 FIX: Renamed to menuContextInfo to avoid duplicate declaration
-        const menuContextInfo = msg.message?.extendedTextMessage?.contextInfo;
-        const quotedStanzaId = menuContextInfo?.stanzaId || '';
+        // MENU REPLY HANDLER
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+        const quotedStanzaId = contextInfo?.stanzaId || '';
         
-        // 🔑 FIX: ONLY reply to menus sent by THIS bot session
+        let quotedText = '';
+        const qm = contextInfo?.quotedMessage || {};
+        if (qm.conversation) {
+            quotedText = qm.conversation;
+        } else if (qm.extendedTextMessage?.text) {
+            quotedText = qm.extendedTextMessage.text;
+        } else if (qm.imageMessage?.caption) {
+            quotedText = qm.imageMessage.caption;
+        } else if (qm.videoMessage?.caption) {
+            quotedText = qm.videoMessage.caption;
+        }
+
         const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
         
-        // 🔑 FIX: Check global botMenuMessageIds for this specific bot number
-        let isThisBotMenu = false;
-        if (quotedStanzaId && botMenuMessageIds.has(number)) {
-            const thisBotMenus = botMenuMessageIds.get(number);
-            if (thisBotMenus && thisBotMenus.has(quotedStanzaId)) {
-                isThisBotMenu = true;
-            }
-        }
-        
-        // 🔑 FIX: Also verify the quoted message was sent BY this bot (not another bot)
-        const quotedParticipant = menuContextInfo?.participant || '';
-        const botOwnJid = socket.user?.id ? socket.user.id.split(':')[0] + '@s.whatsapp.net' : '';
-        const isQuotedFromThisBot = quotedParticipant === botOwnJid || 
-                                     quotedParticipant === number + '@s.whatsapp.net' ||
-                                     (quotedParticipant && quotedParticipant.split('@')[0] === number);
-        
-        // 🔑 CRITICAL FIX: Menu reply ONLY works if message is from THIS bot
-        const isMenuReply = isBotMenuMessage || isThisBotMenu || 
-                           (isQuotedFromThisBot && quotedStanzaId && menuMessageIds.has(quotedStanzaId));
+        const hasMenuKeywords = quotedText.includes('𝗠𝗔𝗜𝗡 𝗠𝗘𝗡𝗨') || 
+                               quotedText.includes('MENU CATEGORIES') ||
+                               quotedText.includes('Reply to this message with a number') ||
+                               (quotedText.includes('DOWNLOAD COMMANDS') && quotedText.includes('SETTINGS COMMANDS')) ||
+                               (quotedText.includes('1️⃣') && quotedText.includes('2️⃣') && quotedText.includes('3️⃣')) ||
+                               (quotedText.includes('Reply 0') && quotedText.includes('Main Menu'));
+
+        const isMenuReply = isBotMenuMessage || hasMenuKeywords;
 
         if (!isCommand && body.match(/^[1-7]$/) && isMenuReply) {
             const categoryNum = parseInt(body);
@@ -1294,18 +1287,7 @@ ${messageText}
             }, { quoted: msg });
             
             if (sentMsg?.key?.id) {
-                // 🔑 FIX: Track in both local and per-bot menu IDs
-                menuMessageIds.set(sentMsg.key.id, { type: 'category', num: categoryNum, botNumber: number });
-                
-                if (!botMenuMessageIds.has(number)) {
-                    botMenuMessageIds.set(number, new Set());
-                }
-                botMenuMessageIds.get(number).add(sentMsg.key.id);
-                
-                if (menuMessageIds.size > 200) {
-                    const oldest = menuMessageIds.keys().next().value;
-                    menuMessageIds.delete(oldest);
-                }
+                menuMessageIds.set(sentMsg.key.id, { type: 'category', num: categoryNum });
             }
             
             return;
@@ -1358,18 +1340,7 @@ ${messageText}
             }, { quoted: msg });
             
             if (sentMsg?.key?.id) {
-                // 🔑 FIX: Track in both local and per-bot menu IDs
-                menuMessageIds.set(sentMsg.key.id, { type: 'main', botNumber: number });
-                
-                if (!botMenuMessageIds.has(number)) {
-                    botMenuMessageIds.set(number, new Set());
-                }
-                botMenuMessageIds.get(number).add(sentMsg.key.id);
-                
-                if (menuMessageIds.size > 200) {
-                    const oldest = menuMessageIds.keys().next().value;
-                    menuMessageIds.delete(oldest);
-                }
+                menuMessageIds.set(sentMsg.key.id, { type: 'main' });
             }
             
             return;
@@ -3869,15 +3840,9 @@ ${emoji} *24h:* ${change}%` + FOOTER);
                     }, { quoted: msg });
 
                     if (sentMsg?.key?.id) {
-                        // 🔑 FIX: Track in both local and per-bot menu IDs
-                        menuMessageIds.set(sentMsg.key.id, { type: 'main', timestamp: Date.now(), botNumber: number });
+                        menuMessageIds.set(sentMsg.key.id, { type: 'main', timestamp: Date.now() });
                         
-                        if (!botMenuMessageIds.has(number)) {
-                            botMenuMessageIds.set(number, new Set());
-                        }
-                        botMenuMessageIds.get(number).add(sentMsg.key.id);
-                        
-                        if (menuMessageIds.size > 200) {
+                        if (menuMessageIds.size > 100) {
                             const oldest = menuMessageIds.keys().next().value;
                             menuMessageIds.delete(oldest);
                         }
@@ -4253,7 +4218,6 @@ async function checkChannelFollow(socket, userJid) {
         return false;
     }
 }
-
 
 // ==========================================
 // Status & Presence Handlers
