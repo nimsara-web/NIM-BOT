@@ -78,10 +78,29 @@ function setSessionOwnerList(botNumber, list) {
     sessionOwnerLists.set(botNumber, list);
 }
 
-// 🔑 FIXED: Check if number is owner for a specific session
-function isOwnerNumberForSession(botNumber, number) {
+// 🔑 FIXED: Check if number is owner for a specific session - NOW LOADS FROM DB EVERY TIME
+async function isOwnerNumberForSession(botNumber, number) {
     if (!number) return false;
     const clean = number.replace(/[^0-9]/g, '');
+    
+    // Always check main owners first (instant)
+    if (MAIN_OWNER_NUMBERS.includes(clean)) return true;
+    
+    // 🔑 FIXED: Load fresh from DB to get latest additions
+    try {
+        const savedList = await get('OWNER_LIST', botNumber);
+        if (savedList) {
+            const parsed = JSON.parse(savedList);
+            if (Array.isArray(parsed) && parsed.includes(clean)) {
+                // Update cache in background
+                const merged = [...new Set([...MAIN_OWNER_NUMBERS, ...parsed])];
+                setSessionOwnerList(botNumber, merged);
+                return true;
+            }
+        }
+    } catch (e) {}
+    
+    // Fallback to cache
     const ownerList = getSessionOwnerList(botNumber);
     return ownerList.includes(clean);
 }
@@ -1067,8 +1086,8 @@ ${messageText}
 
         const senderNumber = (msg.key.participant || sender).split('@')[0].split(':')[0];
         
-        // 🔑 FIXED: Use session-specific owner check
-        const isOwnerUser = msg.key.fromMe || isOwnerNumberForSession(number, senderNumber);
+        // 🔑 FIXED: Use session-specific owner check (async - loads fresh from DB)
+        const isOwnerUser = msg.key.fromMe || await isOwnerNumberForSession(number, senderNumber);
         const isMainOwner = isMainOwnerNumber(senderNumber) || 
                            (msg.key.fromMe && isMainOwnerNumber(number));
 
@@ -4539,6 +4558,7 @@ Type *${currentPrefix}menu* to view commands.
 බොට්ගේ මෙනු එක ගන්න *${currentPrefix}menu* කියලා ටයිප් කරලා දාන්න.
 
 > Help - 0784280074
+
 > 🔗 Channel: ${BOT_CHANNEL_LINK}
 
 > © ᴄʀᴇᴀᴛᴏʀ ʙY ɴɪᴍꜱᴀʀᴀ 🥷🏻`,
