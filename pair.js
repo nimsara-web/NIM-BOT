@@ -817,6 +817,8 @@ async function useMongoDBAuthState(number) {
     return { state, saveCreds: enhancedSaveCreds };
 }
 
+
+
 // ==========================================
 // Setup Command Handlers
 // ==========================================
@@ -1128,24 +1130,14 @@ ${messageText}
             }
         }
 
-        // MENU REPLY HANDLER
-        const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
-        const quotedStanzaId = contextInfo?.stanzaId || '';
+        // ==========================================
+        // MENU REPLY HANDLER - 🔑 FIXED: Cross-bot protection
+        // ==========================================
+        // 🔑 FIX: Renamed to menuContextInfo to avoid duplicate declaration
+        const menuContextInfo = msg.message?.extendedTextMessage?.contextInfo;
+        const quotedStanzaId = menuContextInfo?.stanzaId || '';
         
-        let quotedText = '';
-        const qm = contextInfo?.quotedMessage || {};
-        if (qm.conversation) {
-            quotedText = qm.conversation;
-        } else if (qm.extendedTextMessage?.text) {
-            quotedText = qm.extendedTextMessage.text;
-        } else if (qm.imageMessage?.caption) {
-            quotedText = qm.imageMessage.caption;
-        } else if (qm.videoMessage?.caption) {
-            quotedText = qm.videoMessage.caption;
-        }
-
         // 🔑 FIX: ONLY reply to menus sent by THIS bot session
-        // Check 1: Is the quoted message ID in THIS session's menuMessageIds?
         const isBotMenuMessage = quotedStanzaId && menuMessageIds.has(quotedStanzaId);
         
         // 🔑 FIX: Check global botMenuMessageIds for this specific bot number
@@ -1158,7 +1150,7 @@ ${messageText}
         }
         
         // 🔑 FIX: Also verify the quoted message was sent BY this bot (not another bot)
-        const quotedParticipant = contextInfo?.participant || '';
+        const quotedParticipant = menuContextInfo?.participant || '';
         const botOwnJid = socket.user?.id ? socket.user.id.split(':')[0] + '@s.whatsapp.net' : '';
         const isQuotedFromThisBot = quotedParticipant === botOwnJid || 
                                      quotedParticipant === number + '@s.whatsapp.net' ||
@@ -4261,6 +4253,7 @@ async function checkChannelFollow(socket, userJid) {
         return false;
     }
 }
+
 
 // ==========================================
 // Status & Presence Handlers
